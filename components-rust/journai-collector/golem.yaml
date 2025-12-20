@@ -83,6 +83,11 @@ components:
     #     COMPOSED_VAR_3: "{{ ENV_VAR_3 }}-{{ ENV_VAR_4}}"
     #
     env:
+      DATABASE_TYPE: "postgresql"
+      DATABASE_HOST: "host.docker.internal"
+      DATABASE_USER: "postgres"
+      DATABASE_DB: "postgres"
+      DATABASE_PASSWORD: "journai"
     # LLM providers
     # -------------
 

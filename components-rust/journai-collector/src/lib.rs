@@ -1,5 +1,8 @@
+mod database;
 mod model;
 
+use database::Database;
+use database::PostgresDatabase;
 use golem_rust::{agent_definition, agent_implementation};
 use model::JournalEntry;
 
@@ -19,6 +22,7 @@ pub trait Collector {
 
 struct CollectorImpl {
     hostname: String,
+    database: PostgresDatabase,
     entries: Vec<JournalEntry>,
 }
 
@@ -27,6 +31,7 @@ impl Collector for CollectorImpl {
     fn new(hostname: String) -> Self {
         Self {
             hostname,
+            database: PostgresDatabase::new(),
             entries: Vec::new(),
         }
     }
@@ -34,15 +39,21 @@ impl Collector for CollectorImpl {
     fn collect(&mut self, entries: Vec<JournalEntry>) -> usize {
         let mut accepted_count = 0;
         let mut rejected_count = 0;
+        let mut accepted_entries: Vec<JournalEntry> = Vec::new();
 
         for entry in entries {
             if self.matches_filters(&entry) {
-                self.entries.push(entry);
+                self.entries.push(entry.clone());
+                accepted_entries.push(entry);
                 accepted_count += 1;
             } else {
                 rejected_count += 1;
             }
         }
+
+        self.database
+            .insert_entries(accepted_entries)
+            .expect("Failed to insert entries");
 
         log::info!("Collected {} entries", accepted_count);
         if rejected_count > 0 {
@@ -93,8 +104,8 @@ impl CollectorImpl {
         priority: Option<u8>,
         message_contains: &Option<String>,
     ) -> bool {
-        since.map_or(true, |s| entry.date >= s)
-            && priority.map_or(true, |priority| {
+        since.is_none_or(|s| entry.date >= s)
+            && priority.is_none_or(|priority| {
                 entry
                     .priority
                     .parse::<u8>()
@@ -103,12 +114,12 @@ impl CollectorImpl {
             })
             && message_contains
                 .as_ref()
-                .map_or(true, |m| entry.message.contains(m))
+                .is_none_or(|m| entry.message.contains(m))
     }
 
     fn matches_filters(&self, entry: &JournalEntry) -> bool {
         entry.hostname == self.hostname
-            && entry.priority.parse::<u8>().map_or(false, |p| p <= 7)
+            && entry.priority.parse::<u8>().is_ok_and(|p| p <= 7)
             && !entry.message.is_empty()
     }
 }
