@@ -9,9 +9,12 @@ pub trait Collector {
 
     fn collect(&mut self, entries: Vec<JournalEntry>) -> usize;
 
-    fn get_entries(&self) -> Vec<JournalEntry>;
-
-    fn get_entries_count(&self) -> usize;
+    fn get_entries(
+        &self,
+        since: Option<f64>,
+        priority: Option<u8>,
+        message_contains: Option<String>,
+    ) -> (Vec<JournalEntry>, usize);
 }
 
 struct CollectorImpl {
@@ -42,24 +45,70 @@ impl Collector for CollectorImpl {
         }
 
         log::info!("Collected {} entries", accepted_count);
-        log::warn!("Rejected {} entries", rejected_count);
+        if rejected_count > 0 {
+            log::warn!("Rejected {} entries", rejected_count);
+        }
 
         accepted_count
     }
 
-    fn get_entries(&self) -> Vec<JournalEntry> {
-        log::debug!("Getting entries: {:?}", self.entries);
-        self.entries.clone()
-    }
-
-    fn get_entries_count(&self) -> usize {
-        log::debug!("Getting entries count: {}", self.entries.len());
-        self.entries.len()
+    fn get_entries(
+        &self,
+        since: Option<f64>,
+        priority: Option<u8>,
+        message_contains: Option<String>,
+    ) -> (Vec<JournalEntry>, usize) {
+        self.log_query_params(since, priority, &message_contains);
+        let entries: Vec<JournalEntry> = self
+            .entries
+            .iter()
+            .filter(|e| self.matches_entry(e, since, priority, &message_contains))
+            .cloned()
+            .collect();
+        let count = entries.len();
+        (entries, count)
     }
 }
 
 impl CollectorImpl {
+    fn log_query_params(
+        &self,
+        since: Option<f64>,
+        priority: Option<u8>,
+        message_contains: &Option<String>,
+    ) {
+        log::debug!(
+            "Query for {} (since: {}, priority: {}, message_contains: {})",
+            self.hostname,
+            since.map_or_else(|| "any".to_string(), |x| x.to_string()),
+            priority.map_or_else(|| "any".to_string(), |x| x.to_string()),
+            message_contains.as_deref().unwrap_or("any")
+        );
+    }
+
+    fn matches_entry(
+        &self,
+        entry: &JournalEntry,
+        since: Option<f64>,
+        priority: Option<u8>,
+        message_contains: &Option<String>,
+    ) -> bool {
+        since.map_or(true, |s| entry.date >= s)
+            && priority.map_or(true, |priority| {
+                entry
+                    .priority
+                    .parse::<u8>()
+                    .map(|p| p <= priority)
+                    .unwrap_or(false)
+            })
+            && message_contains
+                .as_ref()
+                .map_or(true, |m| entry.message.contains(m))
+    }
+
     fn matches_filters(&self, entry: &JournalEntry) -> bool {
-        entry.hostname == self.hostname //&& entry.systemd_unit == self.unit
+        entry.hostname == self.hostname
+            && entry.priority.parse::<u8>().map_or(false, |p| p <= 7)
+            && !entry.message.is_empty()
     }
 }

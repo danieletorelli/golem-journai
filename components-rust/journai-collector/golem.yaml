@@ -29,9 +29,38 @@ httpApi:
             response: |
               let hostname: string = request.path.hostname;
               let collector = collector(hostname);
-              let entries = collector.get-entries();
-              let count = collector.get-entries-count();
-              { status: 200, body: { count: count, entries: entries } }
+              let since: f64 = request.query.since;
+              let priority: s8 = request.query.priority;
+              let message_contains: string = request.query.contains;
+              let since_filter: option<f64> = if since < 0 then none else some(since);
+              let priority_filter: option<u8> = if priority < 0 then none else match priority {
+                0s8 => some(0u8),
+                1s8 => some(1u8),
+                2s8 => some(2u8),
+                3s8 => some(3u8),
+                4s8 => some(4u8),
+                5s8 => some(5u8),
+                6s8 => some(6u8),
+                7s8 => some(7u8),
+                _ => none
+              };
+              let message_contains_filter: option<string> = if message_contains == "" then none else some(message_contains);
+              let result = collector.get-entries(since_filter, priority_filter, message_contains_filter);
+              let count = match result { (_, c) => c };
+              let entries = match result { (e, _) => e };
+
+              {
+                status: 200,
+                body: {
+                  entries: entries,
+                  count: count,
+                  filters: {
+                    since: since_filter,
+                    priority: priority_filter,
+                    contains: message_contains_filter
+                  }
+                }
+              }
 
   deployments:
     local:
