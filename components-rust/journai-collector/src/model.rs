@@ -75,3 +75,9 @@ impl PartialEq for JournalEntry {
 }
 
 impl Eq for JournalEntry {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Schema)]
+pub enum CollectorError {
+    InsertError(String),
+    FetchError(String),
+}

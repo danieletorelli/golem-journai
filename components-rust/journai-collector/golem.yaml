@@ -19,8 +19,12 @@ httpApi:
             response: |
               let hostname: string = request.path.hostname;
               let collector = collector(hostname);
-              let count = collector.collect(request.body);
-              { status: 200, body: { result: "Collected ${count} entries" } }
+              let result = collector.collect(request.body);
+              match result {
+                ok(count) => { status: 200, body: { success: true, message: "Collected ${count} entries" } },
+                err(insert-error(e)) => { status: 500, body: { success: false, message: "Collection failed: ${e}" } },
+                _ => { status: 500, body: { success: false, message: "Unexpected error" } }
+              }
         - method: GET
           path: /entries/{hostname}
           binding:
@@ -46,19 +50,17 @@ httpApi:
               };
               let message_contains_filter: option<string> = if message_contains == "" then none else some(message_contains);
               let result = collector.get-entries(since_filter, priority_filter, message_contains_filter);
-              let count = match result { (_, c) => c };
-              let entries = match result { (e, _) => e };
-
-              {
-                status: 200,
+              let status = match result { ok((_, _)) => 200, _ => 500 };
+              let success = match result { ok((_, _)) => true, _ => false };
+              let results = match result { ok((e, c)) => some({ entries: e, count: c }), _ => none };
+              let error = match result { err(fetch-error(e)) => some("Fetch error: ${e}"), err(_) => some("Unexpected error"), _ => none };
+              { 
+                status: status,
                 body: {
-                  entries: entries,
-                  count: count,
-                  filters: {
-                    since: since_filter,
-                    priority: priority_filter,
-                    contains: message_contains_filter
-                  }
+                  success: success,
+                  results: results,
+                  filters: { since: since_filter, priority: priority_filter, contains: message_contains_filter },
+                  error: error
                 }
               }
 

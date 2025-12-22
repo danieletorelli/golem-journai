@@ -4,46 +4,40 @@ mod model;
 use database::Database;
 use database::PostgresDatabase;
 use golem_rust::{agent_definition, agent_implementation};
+use model::CollectorError;
 use model::JournalEntry;
 
 #[agent_definition]
 pub trait Collector {
     fn new(hostname: String) -> Self;
 
-    fn collect(&mut self, entries: Vec<JournalEntry>) -> usize;
+    fn collect(&mut self, entries: Vec<JournalEntry>) -> Result<u64, CollectorError>;
 
     fn get_entries(
-        &self,
+        &mut self,
         since: Option<f64>,
         priority: Option<u8>,
         message_contains: Option<String>,
-    ) -> (Vec<JournalEntry>, usize);
+    ) -> Result<(Vec<JournalEntry>, u64), CollectorError>;
 }
 
 struct CollectorImpl {
     hostname: String,
-    database: PostgresDatabase,
-    entries: Vec<JournalEntry>,
 }
 
 #[agent_implementation]
 impl Collector for CollectorImpl {
     fn new(hostname: String) -> Self {
-        Self {
-            hostname,
-            database: PostgresDatabase::new(),
-            entries: Vec::new(),
-        }
+        Self { hostname }
     }
 
-    fn collect(&mut self, entries: Vec<JournalEntry>) -> usize {
-        let mut accepted_count = 0;
-        let mut rejected_count = 0;
+    fn collect(&mut self, entries: Vec<JournalEntry>) -> Result<u64, CollectorError> {
+        let mut accepted_count: u64 = 0;
+        let mut rejected_count: u64 = 0;
         let mut accepted_entries: Vec<JournalEntry> = Vec::new();
 
         for entry in entries {
             if self.matches_filters(&entry) {
-                self.entries.push(entry.clone());
                 accepted_entries.push(entry);
                 accepted_count += 1;
             } else {
@@ -51,33 +45,34 @@ impl Collector for CollectorImpl {
             }
         }
 
-        self.database
-            .insert_entries(accepted_entries)
-            .expect("Failed to insert entries");
+        PostgresDatabase::insert_entries(accepted_entries).map(|inserted_count| {
+            log::info!("Collected {} entries", accepted_count);
+            if rejected_count > 0 {
+                log::warn!("Rejected {} entries", rejected_count);
+            }
+            if inserted_count != accepted_count {
+                log::warn!(
+                    "Inserted {} entries (accepted: {}",
+                    inserted_count,
+                    accepted_count
+                );
+            }
 
-        log::info!("Collected {} entries", accepted_count);
-        if rejected_count > 0 {
-            log::warn!("Rejected {} entries", rejected_count);
-        }
-
-        accepted_count
+            accepted_count
+        })
     }
 
     fn get_entries(
-        &self,
+        &mut self,
         since: Option<f64>,
         priority: Option<u8>,
         message_contains: Option<String>,
-    ) -> (Vec<JournalEntry>, usize) {
+    ) -> Result<(Vec<JournalEntry>, u64), CollectorError> {
         self.log_query_params(since, priority, &message_contains);
-        let entries: Vec<JournalEntry> = self
-            .entries
-            .iter()
-            .filter(|e| self.matches_entry(e, since, priority, &message_contains))
-            .cloned()
-            .collect();
-        let count = entries.len();
-        (entries, count)
+        PostgresDatabase::get_entries(since, priority, message_contains).map(|entries| {
+            let count = entries.len() as u64;
+            (entries, count)
+        })
     }
 }
 
@@ -95,26 +90,6 @@ impl CollectorImpl {
             priority.map_or_else(|| "any".to_string(), |x| x.to_string()),
             message_contains.as_deref().unwrap_or("any")
         );
-    }
-
-    fn matches_entry(
-        &self,
-        entry: &JournalEntry,
-        since: Option<f64>,
-        priority: Option<u8>,
-        message_contains: &Option<String>,
-    ) -> bool {
-        since.is_none_or(|s| entry.date >= s)
-            && priority.is_none_or(|priority| {
-                entry
-                    .priority
-                    .parse::<u8>()
-                    .map(|p| p <= priority)
-                    .unwrap_or(false)
-            })
-            && message_contains
-                .as_ref()
-                .is_none_or(|m| entry.message.contains(m))
     }
 
     fn matches_filters(&self, entry: &JournalEntry) -> bool {

@@ -1,23 +1,127 @@
-use crate::model::JournalEntry;
+use crate::model::{CollectorError, JournalEntry};
 use golem_rust::bindings::golem::rdbms::postgres::*;
 use std::env;
-
 pub trait Database {
-    fn new() -> Self;
+    fn insert_entries(entries: Vec<JournalEntry>) -> Result<u64, CollectorError>;
 
-    fn insert_entries(&self, entries: Vec<JournalEntry>) -> Result<u64, Error>;
-
-    fn _get_entries(&self) -> Result<Vec<JournalEntry>, Error>;
+    fn get_entries(
+        since: Option<f64>,
+        priority: Option<u8>,
+        message_contains: Option<String>,
+    ) -> Result<Vec<JournalEntry>, CollectorError>;
 }
 
-pub struct PostgresDatabase {
-    connection: Option<DbConnection>,
-}
+pub struct PostgresDatabase;
 
 impl Database for PostgresDatabase {
-    fn new() -> Self {
+    fn insert_entries(entries: Vec<JournalEntry>) -> Result<u64, CollectorError> {
+        match PostgresDatabase::open_connection() {
+            Ok(conn) => {
+                let mut total_rows: u64 = 0;
+
+                if let Ok(transaction) = conn.begin_transaction() {
+                    for entry in entries {
+                        conn.execute(
+                            INSERT_QUERY,
+                            vec![
+                                DbValue::Text(entry.boot_id),
+                                DbValue::Text(entry.hostname),
+                                DbValue::Text(entry.machine_id),
+                                DbValue::Text(entry.priority),
+                                DbValue::Text(entry.message),
+                                DbValue::Float8(entry.date),
+                                DbValue::Text(entry.runtime_scope),
+                                entry.pid.map_or(DbValue::Null, DbValue::Text),
+                                entry.uid.map_or(DbValue::Null, DbValue::Text),
+                                entry.gid.map_or(DbValue::Null, DbValue::Text),
+                                entry.transport.map_or(DbValue::Null, DbValue::Text),
+                                entry.syslog_facility.map_or(DbValue::Null, DbValue::Text),
+                                entry.syslog_identifier.map_or(DbValue::Null, DbValue::Text),
+                                entry.comm.map_or(DbValue::Null, DbValue::Text),
+                                entry.exe.map_or(DbValue::Null, DbValue::Text),
+                                entry.cmdline.map_or(DbValue::Null, DbValue::Text),
+                                entry.unit.map_or(DbValue::Null, DbValue::Text),
+                                entry.systemd_unit.map_or(DbValue::Null, DbValue::Text),
+                                entry.systemd_slice.map_or(DbValue::Null, DbValue::Text),
+                                entry.systemd_cgroup.map_or(DbValue::Null, DbValue::Text),
+                                entry.code_line.map_or(DbValue::Null, DbValue::Text),
+                                entry.code_file.map_or(DbValue::Null, DbValue::Text),
+                                entry.job_id.map_or(DbValue::Null, DbValue::Text),
+                                entry.job_result.map_or(DbValue::Null, DbValue::Text),
+                                entry.job_type.map_or(DbValue::Null, DbValue::Text),
+                                entry.invocation_id.map_or(DbValue::Null, DbValue::Text),
+                                entry
+                                    .source_monotonic_timestamp
+                                    .map_or(DbValue::Null, DbValue::Text),
+                                entry
+                                    .source_boottime_timestamp
+                                    .map_or(DbValue::Null, DbValue::Text),
+                            ],
+                        )
+                        .map(|rows| {
+                            total_rows += rows;
+                        })
+                        .or_else(|e| {
+                            transaction.rollback().map_err(error_to_insert_error)?;
+                            Err(error_to_insert_error(e))
+                        })?;
+                    }
+
+                    transaction.commit().map_err(error_to_insert_error)?;
+                }
+
+                Ok(total_rows)
+            }
+            Err(e) => Err(error_to_insert_error(e)),
+        }
+    }
+
+    fn get_entries(
+        since: Option<f64>,
+        priority: Option<u8>,
+        message_contains: Option<String>,
+    ) -> Result<Vec<JournalEntry>, CollectorError> {
+        let mut conditions: Vec<String> = Vec::new();
+        let mut params: Vec<DbValue> = Vec::new();
+        if let Some(since) = since {
+            conditions.push(format!("date >= ${}", conditions.len() + 1));
+            params.push(DbValue::Float8(since));
+        }
+        if let Some(priority) = priority {
+            conditions.push(format!(
+                "CAST(NULLIF(priority, '') AS INTEGER) <= ${}",
+                conditions.len() + 1
+            ));
+            params.push(DbValue::Int2(priority as i16));
+        }
+        if let Some(message_contains) = message_contains {
+            conditions.push(format!("message ILIKE ${}", conditions.len() + 1));
+            params.push(DbValue::Text(format!("%{}%", message_contains)));
+        }
+
+        let sql = if conditions.is_empty() {
+            BASE_FETCH_QUERY.to_string()
+        } else {
+            format!("{} WHERE {}", BASE_FETCH_QUERY, conditions.join(" AND "))
+        };
+
+        log::debug!("Query: {}", sql);
+        log::debug!("Params: {:?}", params);
+
+        PostgresDatabase::open_connection()
+            .and_then(|conn| PostgresDatabase::create_table(&conn).map(|_| conn))
+            .and_then(|conn| conn.query(&sql, params))
+            .map(|result| result.rows.iter().map(row_to_entry).collect())
+            .map_err(error_to_fetch_error)
+    }
+}
+
+impl PostgresDatabase {
+    fn open_connection() -> Result<DbConnection, Error> {
         if (env::var("DATABASE_TYPE").unwrap_or_else(|_| "none".to_string())) != "postgresql" {
-            return Self { connection: None };
+            return Err(Error::ConnectionFailure(
+                "PostgreSQL was not selected as database type".to_string(),
+            ));
         }
 
         let user = env::var("DATABASE_USER").unwrap_or_else(|_| "journai".to_string());
@@ -40,61 +144,62 @@ impl Database for PostgresDatabase {
 
         log::info!("Connecting to {}", masked_url);
 
-        let conn = DbConnection::open(&url).expect("Failed to connect to database");
-
-        conn.query("SELECT 1", vec![])
-            .expect("Failed to test database connection");
-
-        conn.execute(
-            r#"CREATE TABLE IF NOT EXISTS entries (
-            id SERIAL PRIMARY KEY,
-            boot_id TEXT NOT NULL,
-            hostname TEXT NOT NULL,
-            machine_id TEXT NOT NULL,
-            priority TEXT NOT NULL,
-            message TEXT NOT NULL,
-            date DOUBLE PRECISION NOT NULL,
-            runtime_scope TEXT NOT NULL,
-            pid TEXT,
-            uid TEXT,
-            gid TEXT,
-            transport TEXT,
-            syslog_facility TEXT,
-            syslog_identifier TEXT,
-            comm TEXT,
-            exe TEXT,
-            cmdline TEXT,
-            unit TEXT,
-            systemd_unit TEXT,
-            systemd_slice TEXT,
-            systemd_cgroup TEXT,
-            code_line TEXT,
-            code_file TEXT,
-            job_id TEXT,
-            job_result TEXT,
-            job_type TEXT,
-            invocation_id TEXT,
-            source_monotonic_timestamp TEXT,
-            source_boottime_timestamp TEXT
-        );"#,
-            vec![],
-        )
-        .expect("Failed to initialize the database");
-
-        Self {
-            connection: Some(conn),
+        match DbConnection::open(&url) {
+            Ok(conn) => {
+                if let Err(e) = conn.query("SELECT 1", vec![]) {
+                    log::error!("Connection test failed: {:?}", e);
+                    return Err(e);
+                }
+                Ok(conn)
+            }
+            Err(e) => {
+                log::error!("Failed to open database connection: {:?}", e);
+                Err(e)
+            }
         }
     }
 
-    fn insert_entries(&self, entries: Vec<JournalEntry>) -> Result<u64, Error> {
-        if let Some(conn) = self.connection.as_ref() {
-            let mut total_rows = 0;
-            let transaction = conn
-                .begin_transaction()
-                .expect("Failed to begin the transaction");
+    fn create_table(connection: &DbConnection) -> Result<(), Error> {
+        if let Err(e) = connection.execute(CREATE_TABLE_QUERY, vec![]) {
+            log::error!("Failed to create table: {:?}", e);
+            return Err(e);
+        }
+        Ok(())
+    }
+}
 
-            for entry in entries {
-                let sql = r#"INSERT INTO entries (
+const CREATE_TABLE_QUERY: &str = r#"CREATE TABLE IF NOT EXISTS entries (
+    id SERIAL PRIMARY KEY,
+    boot_id TEXT NOT NULL,
+    hostname TEXT NOT NULL,
+    machine_id TEXT NOT NULL,
+    priority TEXT NOT NULL,
+    message TEXT NOT NULL,
+    date DOUBLE PRECISION NOT NULL,
+    runtime_scope TEXT NOT NULL,
+    pid TEXT,
+    uid TEXT,
+    gid TEXT,
+    transport TEXT,
+    syslog_facility TEXT,
+    syslog_identifier TEXT,
+    comm TEXT,
+    exe TEXT,
+    cmdline TEXT,
+    unit TEXT,
+    systemd_unit TEXT,
+    systemd_slice TEXT,
+    systemd_cgroup TEXT,
+    code_line TEXT,
+    code_file TEXT,
+    job_id TEXT,
+    job_result TEXT,
+    job_type TEXT,
+    invocation_id TEXT,
+    source_monotonic_timestamp TEXT,
+    source_boottime_timestamp TEXT);"#;
+
+const INSERT_QUERY: &str = r#"INSERT INTO entries (
             boot_id, hostname, machine_id, priority, message, date, runtime_scope,
             pid, uid, gid, transport, syslog_facility, syslog_identifier,
             comm, exe, cmdline, unit, systemd_unit, systemd_slice, systemd_cgroup,
@@ -102,115 +207,43 @@ impl Database for PostgresDatabase {
             source_monotonic_timestamp, source_boottime_timestamp
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28)"#;
 
-                conn.execute(
-                    sql,
-                    vec![
-                        DbValue::Text(entry.boot_id),
-                        DbValue::Text(entry.hostname),
-                        DbValue::Text(entry.machine_id),
-                        DbValue::Text(entry.priority),
-                        DbValue::Text(entry.message),
-                        DbValue::Float8(entry.date),
-                        DbValue::Text(entry.runtime_scope),
-                        entry.pid.map_or(DbValue::Null, DbValue::Text),
-                        entry.uid.map_or(DbValue::Null, DbValue::Text),
-                        entry.gid.map_or(DbValue::Null, DbValue::Text),
-                        entry.transport.map_or(DbValue::Null, DbValue::Text),
-                        entry.syslog_facility.map_or(DbValue::Null, DbValue::Text),
-                        entry.syslog_identifier.map_or(DbValue::Null, DbValue::Text),
-                        entry.comm.map_or(DbValue::Null, DbValue::Text),
-                        entry.exe.map_or(DbValue::Null, DbValue::Text),
-                        entry.cmdline.map_or(DbValue::Null, DbValue::Text),
-                        entry.unit.map_or(DbValue::Null, DbValue::Text),
-                        entry.systemd_unit.map_or(DbValue::Null, DbValue::Text),
-                        entry.systemd_slice.map_or(DbValue::Null, DbValue::Text),
-                        entry.systemd_cgroup.map_or(DbValue::Null, DbValue::Text),
-                        entry.code_line.map_or(DbValue::Null, DbValue::Text),
-                        entry.code_file.map_or(DbValue::Null, DbValue::Text),
-                        entry.job_id.map_or(DbValue::Null, DbValue::Text),
-                        entry.job_result.map_or(DbValue::Null, DbValue::Text),
-                        entry.job_type.map_or(DbValue::Null, DbValue::Text),
-                        entry.invocation_id.map_or(DbValue::Null, DbValue::Text),
-                        entry
-                            .source_monotonic_timestamp
-                            .map_or(DbValue::Null, DbValue::Text),
-                        entry
-                            .source_boottime_timestamp
-                            .map_or(DbValue::Null, DbValue::Text),
-                    ],
-                )
-                .map(|rows| {
-                    total_rows += rows;
-                })
-                .map_err(|e| {
-                    transaction
-                        .rollback()
-                        .expect("Failed to rollback the transaction");
-                    e
-                })
-                .expect("Failed to insert the entries");
-            }
+const BASE_FETCH_QUERY: &str = r#"SELECT boot_id, hostname, machine_id, priority, message, date, runtime_scope,
+    pid, uid, gid, transport, syslog_facility, syslog_identifier,
+    comm, exe, cmdline, unit, systemd_unit, systemd_slice, systemd_cgroup,
+    code_line, code_file, job_id, job_result, job_type, invocation_id,
+    source_monotonic_timestamp, source_boottime_timestamp FROM entries"#;
 
-            transaction
-                .commit()
-                .expect("Failed to commit the transaction");
-
-            Ok(total_rows)
-        } else {
-            Ok(0)
-        }
-    }
-
-    fn _get_entries(&self) -> Result<Vec<JournalEntry>, Error> {
-        let sql = "SELECT boot_id, hostname, machine_id, priority, message, date, runtime_scope,
-        pid, uid, gid, transport, syslog_facility, syslog_identifier,
-        comm, exe, cmdline, unit, systemd_unit, systemd_slice, systemd_cgroup,
-        code_line, code_file, job_id, job_result, job_type, invocation_id,
-        source_monotonic_timestamp, source_boottime_timestamp FROM entries";
-
-        if let Some(conn) = self.connection.as_ref() {
-            let result = conn.query(sql, vec![])?;
-            let mut entries = Vec::new();
-
-            for row in result.rows {
-                let entry = JournalEntry {
-                    boot_id: extract_text(&row.values[0]),
-                    hostname: extract_text(&row.values[1]),
-                    machine_id: extract_text(&row.values[2]),
-                    priority: extract_text(&row.values[3]),
-                    message: extract_text(&row.values[4]),
-                    date: extract_float8(&row.values[5]),
-                    runtime_scope: extract_text(&row.values[6]),
-                    pid: extract_optional_text(&row.values[7]),
-                    uid: extract_optional_text(&row.values[8]),
-                    gid: extract_optional_text(&row.values[9]),
-                    transport: extract_optional_text(&row.values[10]),
-                    syslog_facility: extract_optional_text(&row.values[11]),
-                    syslog_identifier: extract_optional_text(&row.values[12]),
-                    comm: extract_optional_text(&row.values[13]),
-                    exe: extract_optional_text(&row.values[14]),
-                    cmdline: extract_optional_text(&row.values[15]),
-                    unit: extract_optional_text(&row.values[16]),
-                    systemd_unit: extract_optional_text(&row.values[17]),
-                    systemd_slice: extract_optional_text(&row.values[18]),
-                    systemd_cgroup: extract_optional_text(&row.values[19]),
-                    code_line: extract_optional_text(&row.values[20]),
-                    code_file: extract_optional_text(&row.values[21]),
-                    job_id: extract_optional_text(&row.values[22]),
-                    job_result: extract_optional_text(&row.values[23]),
-                    job_type: extract_optional_text(&row.values[24]),
-                    invocation_id: extract_optional_text(&row.values[25]),
-                    source_monotonic_timestamp: extract_optional_text(&row.values[26]),
-                    source_boottime_timestamp: extract_optional_text(&row.values[27]),
-                };
-
-                entries.push(entry);
-            }
-
-            Ok(entries)
-        } else {
-            Ok(vec![])
-        }
+fn row_to_entry(row: &DbRow) -> JournalEntry {
+    let values = &row.values;
+    JournalEntry {
+        boot_id: extract_text(&values[0]),
+        hostname: extract_text(&values[1]),
+        machine_id: extract_text(&values[2]),
+        priority: extract_text(&values[3]),
+        message: extract_text(&values[4]),
+        date: extract_float8(&values[5]),
+        runtime_scope: extract_text(&values[6]),
+        pid: extract_optional_text(&values[7]),
+        uid: extract_optional_text(&values[8]),
+        gid: extract_optional_text(&values[9]),
+        transport: extract_optional_text(&values[10]),
+        syslog_facility: extract_optional_text(&values[11]),
+        syslog_identifier: extract_optional_text(&values[12]),
+        comm: extract_optional_text(&values[13]),
+        exe: extract_optional_text(&values[14]),
+        cmdline: extract_optional_text(&values[15]),
+        unit: extract_optional_text(&values[16]),
+        systemd_unit: extract_optional_text(&values[17]),
+        systemd_slice: extract_optional_text(&values[18]),
+        systemd_cgroup: extract_optional_text(&values[19]),
+        code_line: extract_optional_text(&values[20]),
+        code_file: extract_optional_text(&values[21]),
+        job_id: extract_optional_text(&values[22]),
+        job_result: extract_optional_text(&values[23]),
+        job_type: extract_optional_text(&values[24]),
+        invocation_id: extract_optional_text(&values[25]),
+        source_monotonic_timestamp: extract_optional_text(&values[26]),
+        source_boottime_timestamp: extract_optional_text(&values[27]),
     }
 }
 
@@ -233,5 +266,41 @@ fn extract_optional_text(value: &DbValue) -> Option<String> {
         DbValue::Text(s) => Some(s.clone()),
         DbValue::Null => None,
         _ => None,
+    }
+}
+
+fn error_to_insert_error(e: Error) -> CollectorError {
+    match e {
+        Error::ConnectionFailure(e) => {
+            CollectorError::InsertError(format!("Connection failure: {}", e))
+        }
+        Error::QueryExecutionFailure(e) => {
+            CollectorError::InsertError(format!("Query execution failure: {}", e))
+        }
+        Error::QueryParameterFailure(e) => {
+            CollectorError::InsertError(format!("Query parameter failure: {}", e))
+        }
+        Error::QueryResponseFailure(e) => {
+            CollectorError::InsertError(format!("Query response failure: {}", e))
+        }
+        Error::Other(e) => CollectorError::InsertError(e),
+    }
+}
+
+fn error_to_fetch_error(e: Error) -> CollectorError {
+    match e {
+        Error::ConnectionFailure(e) => {
+            CollectorError::FetchError(format!("Connection failure: {}", e))
+        }
+        Error::QueryExecutionFailure(e) => {
+            CollectorError::FetchError(format!("Query execution failure: {}", e))
+        }
+        Error::QueryParameterFailure(e) => {
+            CollectorError::FetchError(format!("Query parameter failure: {}", e))
+        }
+        Error::QueryResponseFailure(e) => {
+            CollectorError::FetchError(format!("Query response failure: {}", e))
+        }
+        Error::Other(e) => CollectorError::FetchError(e),
     }
 }
