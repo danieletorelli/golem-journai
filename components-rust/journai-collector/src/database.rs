@@ -5,6 +5,7 @@ pub trait Database {
     fn insert_entries(entries: Vec<JournalEntry>) -> Result<u64, CollectorError>;
 
     fn get_entries(
+        hostname: String,
         since: Option<f64>,
         priority: Option<u8>,
         message_contains: Option<String>,
@@ -15,102 +16,106 @@ pub struct PostgresDatabase;
 
 impl Database for PostgresDatabase {
     fn insert_entries(entries: Vec<JournalEntry>) -> Result<u64, CollectorError> {
-        match PostgresDatabase::open_connection() {
-            Ok(conn) => {
-                let mut total_rows: u64 = 0;
-
-                if let Ok(transaction) = conn.begin_transaction() {
-                    for entry in entries {
-                        conn.execute(
-                            INSERT_QUERY,
-                            vec![
-                                DbValue::Text(entry.boot_id),
-                                DbValue::Text(entry.hostname),
-                                DbValue::Text(entry.machine_id),
-                                DbValue::Text(entry.priority),
-                                DbValue::Text(entry.message),
-                                DbValue::Float8(entry.date),
-                                DbValue::Text(entry.runtime_scope),
-                                entry.pid.map_or(DbValue::Null, DbValue::Text),
-                                entry.uid.map_or(DbValue::Null, DbValue::Text),
-                                entry.gid.map_or(DbValue::Null, DbValue::Text),
-                                entry.transport.map_or(DbValue::Null, DbValue::Text),
-                                entry.syslog_facility.map_or(DbValue::Null, DbValue::Text),
-                                entry.syslog_identifier.map_or(DbValue::Null, DbValue::Text),
-                                entry.comm.map_or(DbValue::Null, DbValue::Text),
-                                entry.exe.map_or(DbValue::Null, DbValue::Text),
-                                entry.cmdline.map_or(DbValue::Null, DbValue::Text),
-                                entry.unit.map_or(DbValue::Null, DbValue::Text),
-                                entry.systemd_unit.map_or(DbValue::Null, DbValue::Text),
-                                entry.systemd_slice.map_or(DbValue::Null, DbValue::Text),
-                                entry.systemd_cgroup.map_or(DbValue::Null, DbValue::Text),
-                                entry.code_line.map_or(DbValue::Null, DbValue::Text),
-                                entry.code_file.map_or(DbValue::Null, DbValue::Text),
-                                entry.job_id.map_or(DbValue::Null, DbValue::Text),
-                                entry.job_result.map_or(DbValue::Null, DbValue::Text),
-                                entry.job_type.map_or(DbValue::Null, DbValue::Text),
-                                entry.invocation_id.map_or(DbValue::Null, DbValue::Text),
-                                entry
-                                    .source_monotonic_timestamp
-                                    .map_or(DbValue::Null, DbValue::Text),
-                                entry
-                                    .source_boottime_timestamp
-                                    .map_or(DbValue::Null, DbValue::Text),
-                            ],
-                        )
-                        .map(|rows| {
-                            total_rows += rows;
-                        })
-                        .or_else(|e| {
-                            transaction.rollback().map_err(error_to_insert_error)?;
-                            Err(error_to_insert_error(e))
-                        })?;
-                    }
-
-                    transaction.commit().map_err(error_to_insert_error)?;
-                }
-
-                Ok(total_rows)
-            }
-            Err(e) => Err(error_to_insert_error(e)),
+        if entries.is_empty() {
+            return Ok(0);
         }
+
+        let placeholders: Vec<String> = entries
+            .iter()
+            .enumerate()
+            .map(|(i, _)| {
+                let base = i * 28;
+                format!(
+                    "(${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${})",
+                    base + 1, base + 2, base + 3, base + 4, base + 5, base + 6, base + 7, base + 8, base + 9, base + 10, base + 11, base + 12, base + 13, base + 14, base + 15, base + 16, base + 17, base + 18, base + 19, base + 20, base + 21, base + 22, base + 23, base + 24, base + 25, base + 26, base + 27, base + 28
+                )
+            })
+            .collect();
+
+        let sql = format!("{} VALUES {}", BASE_INSERT_QUERY, placeholders.join(", "));
+
+        let mut params: Vec<DbValue> = Vec::new();
+        for entry in entries {
+            params.extend(vec![
+                DbValue::Text(entry.boot_id),
+                DbValue::Text(entry.hostname),
+                DbValue::Text(entry.machine_id),
+                DbValue::Text(entry.priority),
+                DbValue::Text(entry.message),
+                DbValue::Float8(entry.date),
+                DbValue::Text(entry.runtime_scope),
+                entry.pid.map_or(DbValue::Null, DbValue::Text),
+                entry.uid.map_or(DbValue::Null, DbValue::Text),
+                entry.gid.map_or(DbValue::Null, DbValue::Text),
+                entry.transport.map_or(DbValue::Null, DbValue::Text),
+                entry.syslog_facility.map_or(DbValue::Null, DbValue::Text),
+                entry.syslog_identifier.map_or(DbValue::Null, DbValue::Text),
+                entry.comm.map_or(DbValue::Null, DbValue::Text),
+                entry.exe.map_or(DbValue::Null, DbValue::Text),
+                entry.cmdline.map_or(DbValue::Null, DbValue::Text),
+                entry.unit.map_or(DbValue::Null, DbValue::Text),
+                entry.systemd_unit.map_or(DbValue::Null, DbValue::Text),
+                entry.systemd_slice.map_or(DbValue::Null, DbValue::Text),
+                entry.systemd_cgroup.map_or(DbValue::Null, DbValue::Text),
+                entry.code_line.map_or(DbValue::Null, DbValue::Text),
+                entry.code_file.map_or(DbValue::Null, DbValue::Text),
+                entry.job_id.map_or(DbValue::Null, DbValue::Text),
+                entry.job_result.map_or(DbValue::Null, DbValue::Text),
+                entry.job_type.map_or(DbValue::Null, DbValue::Text),
+                entry.invocation_id.map_or(DbValue::Null, DbValue::Text),
+                entry
+                    .source_monotonic_timestamp
+                    .map_or(DbValue::Null, DbValue::Text),
+                entry
+                    .source_boottime_timestamp
+                    .map_or(DbValue::Null, DbValue::Text),
+            ]);
+        }
+
+        log::debug!("Query: {}", sql);
+        log::debug!("Params: {:?}", params);
+
+        let conn = PostgresDatabase::open_connection().map_err(error_to_insert_error)?;
+        PostgresDatabase::create_table(&conn).map_err(error_to_insert_error)?;
+        conn.execute(&sql, params).map_err(error_to_insert_error)
     }
 
     fn get_entries(
+        hostname: String,
         since: Option<f64>,
         priority: Option<u8>,
         message_contains: Option<String>,
     ) -> Result<Vec<JournalEntry>, CollectorError> {
         let mut conditions: Vec<String> = Vec::new();
-        let mut params: Vec<DbValue> = Vec::new();
+        let mut params: Vec<DbValue> = vec![DbValue::Text(hostname)];
         if let Some(since) = since {
-            conditions.push(format!("date >= ${}", conditions.len() + 1));
+            conditions.push(format!("date >= ${}", params.len() + 1));
             params.push(DbValue::Float8(since));
         }
         if let Some(priority) = priority {
             conditions.push(format!(
                 "CAST(NULLIF(priority, '') AS INTEGER) <= ${}",
-                conditions.len() + 1
+                params.len() + 1
             ));
             params.push(DbValue::Int2(priority as i16));
         }
         if let Some(message_contains) = message_contains {
-            conditions.push(format!("message ILIKE ${}", conditions.len() + 1));
+            conditions.push(format!("message ILIKE ${}", params.len() + 1));
             params.push(DbValue::Text(format!("%{}%", message_contains)));
         }
 
         let sql = if conditions.is_empty() {
             BASE_FETCH_QUERY.to_string()
         } else {
-            format!("{} WHERE {}", BASE_FETCH_QUERY, conditions.join(" AND "))
+            format!("{} AND {}", BASE_FETCH_QUERY, conditions.join(" AND "))
         };
 
         log::debug!("Query: {}", sql);
         log::debug!("Params: {:?}", params);
 
-        PostgresDatabase::open_connection()
-            .and_then(|conn| PostgresDatabase::create_table(&conn).map(|_| conn))
-            .and_then(|conn| conn.query(&sql, params))
+        let conn = PostgresDatabase::open_connection().map_err(error_to_insert_error)?;
+        PostgresDatabase::create_table(&conn).map_err(error_to_insert_error)?;
+        conn.query(&sql, params)
             .map(|result| result.rows.iter().map(row_to_entry).collect())
             .map_err(error_to_fetch_error)
     }
@@ -118,7 +123,7 @@ impl Database for PostgresDatabase {
 
 impl PostgresDatabase {
     fn open_connection() -> Result<DbConnection, Error> {
-        if (env::var("DATABASE_TYPE").unwrap_or_else(|_| "none".to_string())) != "postgresql" {
+        if env::var("DATABASE_TYPE").unwrap_or_else(|_| "none".to_string()) != "postgresql" {
             return Err(Error::ConnectionFailure(
                 "PostgreSQL was not selected as database type".to_string(),
             ));
@@ -142,7 +147,7 @@ impl PostgresDatabase {
             format!("postgres://{}:***@{}:{}/{}", user, host, port, db)
         };
 
-        log::info!("Connecting to {}", masked_url);
+        log::debug!("Connecting to {}", masked_url);
 
         match DbConnection::open(&url) {
             Ok(conn) => {
@@ -160,10 +165,27 @@ impl PostgresDatabase {
     }
 
     fn create_table(connection: &DbConnection) -> Result<(), Error> {
-        if let Err(e) = connection.execute(CREATE_TABLE_QUERY, vec![]) {
-            log::error!("Failed to create table: {:?}", e);
-            return Err(e);
+        if env::var("DATABASE_INIT").unwrap_or_else(|_| "false".to_string()) != "true" {
+            return Ok(());
         }
+
+        log::debug!("Initializing database");
+
+        let transaction = connection.begin_transaction()?;
+
+        let all_queries =
+            std::iter::once(CREATE_TABLE_QUERY).chain(CREATE_INDEXES_QUERIES.iter().copied());
+
+        for query in all_queries {
+            if let Err(e) = connection.execute(query, vec![]) {
+                log::error!("Failed to execute query: {:?}", e);
+                let _ = transaction.rollback();
+                return Err(e);
+            }
+        }
+
+        transaction.commit()?;
+        log::debug!("Database initialized successfully");
         Ok(())
     }
 }
@@ -199,19 +221,26 @@ const CREATE_TABLE_QUERY: &str = r#"CREATE TABLE IF NOT EXISTS entries (
     source_monotonic_timestamp TEXT,
     source_boottime_timestamp TEXT);"#;
 
-const INSERT_QUERY: &str = r#"INSERT INTO entries (
+const CREATE_INDEXES_QUERIES: &[&str] = &[
+    r#"CREATE INDEX IF NOT EXISTS idx_entries_date ON entries(date);"#,
+    r#"CREATE INDEX IF NOT EXISTS idx_entries_priority ON entries(priority);"#,
+    r#"CREATE INDEX IF NOT EXISTS idx_entries_hostname ON entries(hostname);"#,
+    r#"CREATE INDEX IF NOT EXISTS idx_entries_message ON entries(message);"#,
+];
+
+const BASE_INSERT_QUERY: &str = r#"INSERT INTO entries (
             boot_id, hostname, machine_id, priority, message, date, runtime_scope,
             pid, uid, gid, transport, syslog_facility, syslog_identifier,
             comm, exe, cmdline, unit, systemd_unit, systemd_slice, systemd_cgroup,
             code_line, code_file, job_id, job_result, job_type, invocation_id,
             source_monotonic_timestamp, source_boottime_timestamp
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28)"#;
+        )"#;
 
 const BASE_FETCH_QUERY: &str = r#"SELECT boot_id, hostname, machine_id, priority, message, date, runtime_scope,
     pid, uid, gid, transport, syslog_facility, syslog_identifier,
     comm, exe, cmdline, unit, systemd_unit, systemd_slice, systemd_cgroup,
     code_line, code_file, job_id, job_result, job_type, invocation_id,
-    source_monotonic_timestamp, source_boottime_timestamp FROM entries"#;
+    source_monotonic_timestamp, source_boottime_timestamp FROM entries WHERE hostname = $1"#;
 
 fn row_to_entry(row: &DbRow) -> JournalEntry {
     let values = &row.values;

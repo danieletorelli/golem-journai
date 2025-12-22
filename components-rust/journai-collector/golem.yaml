@@ -86,6 +86,7 @@ components:
     #
     env:
       DATABASE_TYPE: "postgresql"
+      DATABASE_INIT: "false"
       DATABASE_HOST: "host.docker.internal"
       DATABASE_USER: "postgres"
       DATABASE_DB: "postgres"

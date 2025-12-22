@@ -11,10 +11,10 @@ use model::JournalEntry;
 pub trait Collector {
     fn new(hostname: String) -> Self;
 
-    fn collect(&mut self, entries: Vec<JournalEntry>) -> Result<u64, CollectorError>;
+    fn collect(&self, entries: Vec<JournalEntry>) -> Result<u64, CollectorError>;
 
     fn get_entries(
-        &mut self,
+        &self,
         since: Option<f64>,
         priority: Option<u8>,
         message_contains: Option<String>,
@@ -31,7 +31,7 @@ impl Collector for CollectorImpl {
         Self { hostname }
     }
 
-    fn collect(&mut self, entries: Vec<JournalEntry>) -> Result<u64, CollectorError> {
+    fn collect(&self, entries: Vec<JournalEntry>) -> Result<u64, CollectorError> {
         let mut accepted_count: u64 = 0;
         let mut rejected_count: u64 = 0;
         let mut accepted_entries: Vec<JournalEntry> = Vec::new();
@@ -63,16 +63,17 @@ impl Collector for CollectorImpl {
     }
 
     fn get_entries(
-        &mut self,
+        &self,
         since: Option<f64>,
         priority: Option<u8>,
         message_contains: Option<String>,
     ) -> Result<(Vec<JournalEntry>, u64), CollectorError> {
         self.log_query_params(since, priority, &message_contains);
-        PostgresDatabase::get_entries(since, priority, message_contains).map(|entries| {
-            let count = entries.len() as u64;
-            (entries, count)
-        })
+        PostgresDatabase::get_entries(self.hostname.to_string(), since, priority, message_contains)
+            .map(|entries| {
+                let count = entries.len() as u64;
+                (entries, count)
+            })
     }
 }
 
