@@ -1,25 +1,11 @@
 mod database;
-mod model;
 
+use common_lib::database::PostgresDatabase;
+use common_lib::model::*;
+use common_lib::*;
 use database::Database;
-use database::PostgresDatabase;
-use golem_rust::{agent_definition, agent_implementation};
-use model::CollectorError;
-use model::JournalEntry;
-
-#[agent_definition]
-pub trait Collector {
-    fn new(hostname: String) -> Self;
-
-    fn collect(&self, entries: Vec<JournalEntry>) -> Result<u64, CollectorError>;
-
-    fn get_entries(
-        &self,
-        since: Option<f64>,
-        priority: Option<u8>,
-        message_contains: Option<String>,
-    ) -> Result<(Vec<JournalEntry>, u64), CollectorError>;
-}
+use golem_rust::agent_implementation;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 struct CollectorImpl {
     hostname: String,
@@ -74,6 +60,23 @@ impl Collector for CollectorImpl {
                 let count = entries.len() as u64;
                 (entries, count)
             })
+    }
+
+    fn get_error_spikes(&self) -> Result<Vec<ServiceErrorsNoEntries>, CollectorError> {
+        let last_analysis_timestamp =
+            PostgresDatabase::get_last_analysis_timestamp(self.hostname.to_string())?;
+
+        let since = last_analysis_timestamp.unwrap_or_else(|| {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs_f64();
+            now - (14.0 * 24.0 * 60.0 * 60.0) // Last two-week timestamp
+        });
+
+        let error_spikes = PostgresDatabase::get_error_spikes(self.hostname.to_string(), since);
+
+        error_spikes.map(|errors| errors.into_iter().map(|e| e.into()).collect())
     }
 }
 

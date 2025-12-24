@@ -23,7 +23,7 @@ httpApi:
               match result {
                 ok(count) => { status: 200, body: { success: true, message: "Collected ${count} entries" } },
                 err(insert-error(e)) => { status: 500, body: { success: false, message: "Collection failed: ${e}" } },
-                _ => { status: 500, body: { success: false, message: "Unexpected error" } }
+                err(fetch-error(e)) => { status: 500, body: { success: false, message: "Collection failed: ${e}" } }
               }
         - method: GET
           path: /entries/{hostname}
@@ -53,7 +53,7 @@ httpApi:
               let status = match result { ok((_, _)) => 200, _ => 500 };
               let success = match result { ok((_, _)) => true, _ => false };
               let results = match result { ok((e, c)) => some({ entries: e, count: c }), _ => none };
-              let error = match result { err(fetch-error(e)) => some("Fetch error: ${e}"), err(_) => some("Unexpected error"), _ => none };
+              let error = match result { err(fetch-error(e)) => some("Fetch error: ${e}"), err(insert-error(e)) => some("Insert error: ${e}"), _ => none };
               { 
                 status: status,
                 body: {
@@ -63,7 +63,27 @@ httpApi:
                   error: error
                 }
               }
-
+        - method: GET
+          path: /errors/{hostname}
+          binding:
+            type: default
+            componentName: journai:collector
+            response: |
+              let hostname: string = request.path.hostname;
+              let collector = collector(hostname);
+              let result = collector.get-error-spikes();
+              let status = match result { ok(_) => 200, _ => 500 };
+              let success = match result { ok(_) => true, _ => false };
+              let results = match result { ok(e) => some(e), _ => none };
+              let error = match result { err(fetch-error(e)) => some("Fetch error: ${e}"), err(insert-error(e)) => some("Insert error: ${e}"), _ => none };
+              {
+                status: status,
+                body: {
+                  success: success,
+                  results: results,
+                  error: error
+                }
+              }
   deployments:
     local:
       - domain: 192.168.2.44:9006
@@ -85,12 +105,12 @@ components:
     #     COMPOSED_VAR_3: "{{ ENV_VAR_3 }}-{{ ENV_VAR_4}}"
     #
     env:
-      DATABASE_TYPE: "postgresql"
-      DATABASE_INIT: "false"
-      DATABASE_HOST: "host.docker.internal"
-      DATABASE_USER: "postgres"
-      DATABASE_DB: "postgres"
-      DATABASE_PASSWORD: "journai"
+      DATABASE_TYPE: postgresql
+      DATABASE_INIT: "true"
+      DATABASE_HOST: host.docker.internal
+      DATABASE_USER: postgres
+      DATABASE_DB: postgres
+      DATABASE_PASSWORD: journai
     # LLM providers
     # -------------
 

@@ -103,6 +103,13 @@ dependencies = [
 [[package]]
 name = "common-lib"
 version = "0.1.0"
+dependencies = [
+ "golem-rust",
+ "log",
+ "serde",
+ "serde_json",
+ "wstd",
+]
 
 [[package]]
 name = "core-foundation-sys"
@@ -307,9 +314,9 @@ dependencies = [
 
 [[package]]
 name = "golem-rust"
-version = "1.10.3"
+version = "1.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bcaaaaa8ce497900aefa357434e02669758e16c60f998cd84eab61729c71f4e2"
+checksum = "9167b3a01b2905a2b2491021e759a65c0f7204beed6efcfe710a613f2a0db637"
 dependencies = [
  "async-trait",
  "ctor",
@@ -328,9 +335,9 @@ dependencies = [
 
 [[package]]
 name = "golem-rust-macro"
-version = "1.10.3"
+version = "1.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c678ca6c7afe9b29bfd1e3a8ada15187df8166dd5718269b42f5823aac6658ec"
+checksum = "7c4f3bbb1a8c1bed95f4b4d9120c33ebdce1fa68a377b6345089d87ce670ff6d"
 dependencies = [
  "heck 0.5.0",
  "proc-macro-crate",
@@ -556,6 +563,7 @@ checksum = "4a5f13b858c8d314ee3e8f639011f7ccefe71f97f96e50151fb991f267928e2c"
 name = "journai_analyzer"
 version = "0.0.1"
 dependencies = [
+ "common-lib",
  "golem-rust",
  "log",
  "serde",
@@ -567,6 +575,7 @@ dependencies = [
 name = "journai_collector"
 version = "0.0.1"
 dependencies = [
+ "common-lib",
  "golem-rust",
  "log",
  "serde",

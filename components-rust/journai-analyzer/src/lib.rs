@@ -1,17 +1,21 @@
-use golem_rust::{agent_definition, agent_implementation};
+mod database;
 
-#[agent_definition]
-pub trait Analyzer {
-    fn new(name: String) -> Self;
-}
+use common_lib::model::{AnalyzerError, ServiceErrors};
+use common_lib::Analyzer;
+use golem_rust::agent_implementation;
 
 struct AnalyzerImpl {
-    _name: String,
+    hostname: String,
+    service: String,
 }
 
-#[agent_implementation]
+#[agent_implementation(ephemeral)]
 impl Analyzer for AnalyzerImpl {
-    fn new(name: String) -> Self {
-        Self { _name: name }
+    fn new(hostname: String, service: String) -> Self {
+        Self { hostname, service }
+    }
+
+    fn analyze_spike(&self, entries: Vec<ServiceErrors>) -> Result<(), AnalyzerError> {
+        todo!()
     }
 }

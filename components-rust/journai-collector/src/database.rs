@@ -1,6 +1,9 @@
-use crate::model::{CollectorError, JournalEntry};
+use common_lib::database::*;
+use common_lib::model::{
+    CollectorError, CollectorErrorType, JournalEntry, ServiceErrors, ServiceErrorsBuilder,
+};
 use golem_rust::bindings::golem::rdbms::postgres::*;
-use std::env;
+
 pub trait Database {
     fn insert_entries(entries: Vec<JournalEntry>) -> Result<u64, CollectorError>;
 
@@ -10,9 +13,12 @@ pub trait Database {
         priority: Option<u8>,
         message_contains: Option<String>,
     ) -> Result<Vec<JournalEntry>, CollectorError>;
-}
 
-pub struct PostgresDatabase;
+    fn get_last_analysis_timestamp(hostname: String) -> Result<Option<f64>, CollectorError>;
+
+    fn get_error_spikes(hostname: String, since: f64)
+        -> Result<Vec<ServiceErrors>, CollectorError>;
+}
 
 impl Database for PostgresDatabase {
     fn insert_entries(entries: Vec<JournalEntry>) -> Result<u64, CollectorError> {
@@ -20,19 +26,25 @@ impl Database for PostgresDatabase {
             return Ok(0);
         }
 
+        const FIELD_COUNT: usize = 28;
+
         let placeholders: Vec<String> = entries
             .iter()
             .enumerate()
             .map(|(i, _)| {
-                let base = i * 28;
-                format!(
-                    "(${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${})",
-                    base + 1, base + 2, base + 3, base + 4, base + 5, base + 6, base + 7, base + 8, base + 9, base + 10, base + 11, base + 12, base + 13, base + 14, base + 15, base + 16, base + 17, base + 18, base + 19, base + 20, base + 21, base + 22, base + 23, base + 24, base + 25, base + 26, base + 27, base + 28
-                )
+                let base = i * FIELD_COUNT;
+                let params: Vec<String> = (1..=FIELD_COUNT)
+                    .map(|i| format!("${}", base + i))
+                    .collect();
+                format!("({})", params.join(", "))
             })
             .collect();
 
-        let sql = format!("{} VALUES {}", BASE_INSERT_QUERY, placeholders.join(", "));
+        let sql = format!(
+            "{} VALUES {} ON CONFLICT DO NOTHING",
+            BASE_INSERT_QUERY,
+            placeholders.join(", ")
+        );
 
         let mut params: Vec<DbValue> = Vec::new();
         for entry in entries {
@@ -40,7 +52,7 @@ impl Database for PostgresDatabase {
                 DbValue::Text(entry.boot_id),
                 DbValue::Text(entry.hostname),
                 DbValue::Text(entry.machine_id),
-                DbValue::Text(entry.priority),
+                DbValue::Int2(entry.priority.parse::<u8>().unwrap_or(0) as i16),
                 DbValue::Text(entry.message),
                 DbValue::Float8(entry.date),
                 DbValue::Text(entry.runtime_scope),
@@ -75,9 +87,11 @@ impl Database for PostgresDatabase {
         log::debug!("Query: {}", sql);
         log::debug!("Params: {:?}", params);
 
-        let conn = PostgresDatabase::open_connection().map_err(error_to_insert_error)?;
-        PostgresDatabase::create_table(&conn).map_err(error_to_insert_error)?;
-        conn.execute(&sql, params).map_err(error_to_insert_error)
+        let conn =
+            PostgresDatabase::open_connection().map_err(|e| CollectorErrorType::Insert.wrap(e))?;
+        PostgresDatabase::create_table(&conn).map_err(|e| CollectorErrorType::Insert.wrap(e))?;
+        conn.execute(&sql, params)
+            .map_err(|e| CollectorErrorType::Insert.wrap(e))
     }
 
     fn get_entries(
@@ -86,6 +100,9 @@ impl Database for PostgresDatabase {
         priority: Option<u8>,
         message_contains: Option<String>,
     ) -> Result<Vec<JournalEntry>, CollectorError> {
+        let conn =
+            PostgresDatabase::open_connection().map_err(|e| CollectorErrorType::Fetch.wrap(e))?;
+
         let mut conditions: Vec<String> = Vec::new();
         let mut params: Vec<DbValue> = vec![DbValue::Text(hostname)];
         if let Some(since) = since {
@@ -93,10 +110,7 @@ impl Database for PostgresDatabase {
             params.push(DbValue::Float8(since));
         }
         if let Some(priority) = priority {
-            conditions.push(format!(
-                "CAST(NULLIF(priority, '') AS INTEGER) <= ${}",
-                params.len() + 1
-            ));
+            conditions.push(format!("priority <= ${}", params.len() + 1));
             params.push(DbValue::Int2(priority as i16));
         }
         if let Some(message_contains) = message_contains {
@@ -113,120 +127,53 @@ impl Database for PostgresDatabase {
         log::debug!("Query: {}", sql);
         log::debug!("Params: {:?}", params);
 
-        let conn = PostgresDatabase::open_connection().map_err(error_to_insert_error)?;
-        PostgresDatabase::create_table(&conn).map_err(error_to_insert_error)?;
+        PostgresDatabase::create_table(&conn).map_err(|e| CollectorErrorType::Insert.wrap(e))?;
         conn.query(&sql, params)
-            .map(|result| result.rows.iter().map(row_to_entry).collect())
-            .map_err(error_to_fetch_error)
+            .map(|result| result.rows.iter().map(|r| r.into()).collect())
+            .map_err(|e| CollectorErrorType::Fetch.wrap(e))
+    }
+
+    fn get_last_analysis_timestamp(hostname: String) -> Result<Option<f64>, CollectorError> {
+        let conn =
+            PostgresDatabase::open_connection().map_err(|e| CollectorErrorType::Fetch.wrap(e))?;
+        let params: Vec<DbValue> = vec![DbValue::Text(hostname)];
+
+        log::debug!("Query: {}", FETCH_LAST_ANALYSIS_TIMESTAMP_QUERY);
+        log::debug!("Params: {:?}", params);
+
+        conn.query(FETCH_LAST_ANALYSIS_TIMESTAMP_QUERY, params)
+            .map(|result| result.rows.first().map(|row| extract_float(&row.values[0])))
+            .map_err(|e| CollectorErrorType::Fetch.wrap(e))
+    }
+
+    fn get_error_spikes(
+        hostname: String,
+        since: f64,
+    ) -> Result<Vec<ServiceErrors>, CollectorError> {
+        let conn =
+            PostgresDatabase::open_connection().map_err(|e| CollectorErrorType::Fetch.wrap(e))?;
+        let params: Vec<DbValue> =
+            vec![DbValue::Text(hostname.to_string()), DbValue::Float8(since)];
+
+        log::debug!("Query: {}", FETCH_ERROR_SPIKES_QUERY);
+        log::debug!("Params: {:?}", params);
+
+        conn.query(FETCH_ERROR_SPIKES_QUERY, params)
+            .map(|result| {
+                result
+                    .rows
+                    .iter()
+                    .map(|row| {
+                        ServiceErrors::from(ServiceErrorsBuilder {
+                            hostname: hostname.to_string(),
+                            row,
+                        })
+                    })
+                    .collect()
+            })
+            .map_err(|e| CollectorErrorType::Fetch.wrap(e))
     }
 }
-
-impl PostgresDatabase {
-    fn open_connection() -> Result<DbConnection, Error> {
-        if env::var("DATABASE_TYPE").unwrap_or_else(|_| "none".to_string()) != "postgresql" {
-            return Err(Error::ConnectionFailure(
-                "PostgreSQL was not selected as database type".to_string(),
-            ));
-        }
-
-        let user = env::var("DATABASE_USER").unwrap_or_else(|_| "journai".to_string());
-        let password = env::var("DATABASE_PASSWORD").unwrap_or_else(|_| "".to_string());
-        let host = env::var("DATABASE_HOST").unwrap_or_else(|_| "localhost".to_string());
-        let port = env::var("DATABASE_PORT").unwrap_or_else(|_| "5432".to_string());
-        let db = env::var("DATABASE_DB").unwrap_or_else(|_| "journai".to_string());
-
-        let url = if password.is_empty() {
-            format!("postgres://{}@{}:{}/{}", user, host, port, db)
-        } else {
-            format!("postgres://{}:{}@{}:{}/{}", user, password, host, port, db)
-        };
-
-        let masked_url = if password.is_empty() {
-            format!("postgres://{}@{}:{}/{}", user, host, port, db)
-        } else {
-            format!("postgres://{}:***@{}:{}/{}", user, host, port, db)
-        };
-
-        log::debug!("Connecting to {}", masked_url);
-
-        match DbConnection::open(&url) {
-            Ok(conn) => {
-                if let Err(e) = conn.query("SELECT 1", vec![]) {
-                    log::error!("Connection test failed: {:?}", e);
-                    return Err(e);
-                }
-                Ok(conn)
-            }
-            Err(e) => {
-                log::error!("Failed to open database connection: {:?}", e);
-                Err(e)
-            }
-        }
-    }
-
-    fn create_table(connection: &DbConnection) -> Result<(), Error> {
-        if env::var("DATABASE_INIT").unwrap_or_else(|_| "false".to_string()) != "true" {
-            return Ok(());
-        }
-
-        log::debug!("Initializing database");
-
-        let transaction = connection.begin_transaction()?;
-
-        let all_queries =
-            std::iter::once(CREATE_TABLE_QUERY).chain(CREATE_INDEXES_QUERIES.iter().copied());
-
-        for query in all_queries {
-            if let Err(e) = connection.execute(query, vec![]) {
-                log::error!("Failed to execute query: {:?}", e);
-                let _ = transaction.rollback();
-                return Err(e);
-            }
-        }
-
-        transaction.commit()?;
-        log::debug!("Database initialized successfully");
-        Ok(())
-    }
-}
-
-const CREATE_TABLE_QUERY: &str = r#"CREATE TABLE IF NOT EXISTS entries (
-    id SERIAL PRIMARY KEY,
-    boot_id TEXT NOT NULL,
-    hostname TEXT NOT NULL,
-    machine_id TEXT NOT NULL,
-    priority TEXT NOT NULL,
-    message TEXT NOT NULL,
-    date DOUBLE PRECISION NOT NULL,
-    runtime_scope TEXT NOT NULL,
-    pid TEXT,
-    uid TEXT,
-    gid TEXT,
-    transport TEXT,
-    syslog_facility TEXT,
-    syslog_identifier TEXT,
-    comm TEXT,
-    exe TEXT,
-    cmdline TEXT,
-    unit TEXT,
-    systemd_unit TEXT,
-    systemd_slice TEXT,
-    systemd_cgroup TEXT,
-    code_line TEXT,
-    code_file TEXT,
-    job_id TEXT,
-    job_result TEXT,
-    job_type TEXT,
-    invocation_id TEXT,
-    source_monotonic_timestamp TEXT,
-    source_boottime_timestamp TEXT);"#;
-
-const CREATE_INDEXES_QUERIES: &[&str] = &[
-    r#"CREATE INDEX IF NOT EXISTS idx_entries_date ON entries(date);"#,
-    r#"CREATE INDEX IF NOT EXISTS idx_entries_priority ON entries(priority);"#,
-    r#"CREATE INDEX IF NOT EXISTS idx_entries_hostname ON entries(hostname);"#,
-    r#"CREATE INDEX IF NOT EXISTS idx_entries_message ON entries(message);"#,
-];
 
 const BASE_INSERT_QUERY: &str = r#"INSERT INTO entries (
             boot_id, hostname, machine_id, priority, message, date, runtime_scope,
@@ -242,94 +189,19 @@ const BASE_FETCH_QUERY: &str = r#"SELECT boot_id, hostname, machine_id, priority
     code_line, code_file, job_id, job_result, job_type, invocation_id,
     source_monotonic_timestamp, source_boottime_timestamp FROM entries WHERE hostname = $1"#;
 
-fn row_to_entry(row: &DbRow) -> JournalEntry {
-    let values = &row.values;
-    JournalEntry {
-        boot_id: extract_text(&values[0]),
-        hostname: extract_text(&values[1]),
-        machine_id: extract_text(&values[2]),
-        priority: extract_text(&values[3]),
-        message: extract_text(&values[4]),
-        date: extract_float8(&values[5]),
-        runtime_scope: extract_text(&values[6]),
-        pid: extract_optional_text(&values[7]),
-        uid: extract_optional_text(&values[8]),
-        gid: extract_optional_text(&values[9]),
-        transport: extract_optional_text(&values[10]),
-        syslog_facility: extract_optional_text(&values[11]),
-        syslog_identifier: extract_optional_text(&values[12]),
-        comm: extract_optional_text(&values[13]),
-        exe: extract_optional_text(&values[14]),
-        cmdline: extract_optional_text(&values[15]),
-        unit: extract_optional_text(&values[16]),
-        systemd_unit: extract_optional_text(&values[17]),
-        systemd_slice: extract_optional_text(&values[18]),
-        systemd_cgroup: extract_optional_text(&values[19]),
-        code_line: extract_optional_text(&values[20]),
-        code_file: extract_optional_text(&values[21]),
-        job_id: extract_optional_text(&values[22]),
-        job_result: extract_optional_text(&values[23]),
-        job_type: extract_optional_text(&values[24]),
-        invocation_id: extract_optional_text(&values[25]),
-        source_monotonic_timestamp: extract_optional_text(&values[26]),
-        source_boottime_timestamp: extract_optional_text(&values[27]),
-    }
-}
+const FETCH_ERROR_SPIKES_QUERY: &str = r#"SELECT
+    COALESCE(unit, syslog_identifier, comm, 'unknown') AS service_name,
+    COUNT(*) AS error_count,
+    MIN(date) AS first_error,
+    MAX(date) AS last_error,
+    ARRAY_AGG(id ORDER BY date DESC) AS entry_ids
+FROM entries
+WHERE
+    hostname = $1 AND date >= $2
+  AND CAST(priority AS INTEGER) <= 3
+GROUP BY service_name
+HAVING COUNT(*) > 5
+ORDER BY error_count DESC;"#;
 
-fn extract_text(value: &DbValue) -> String {
-    match value {
-        DbValue::Text(s) => s.clone(),
-        _ => String::new(),
-    }
-}
-
-fn extract_float8(value: &DbValue) -> f64 {
-    match value {
-        DbValue::Float8(f) => *f,
-        _ => 0.0,
-    }
-}
-
-fn extract_optional_text(value: &DbValue) -> Option<String> {
-    match value {
-        DbValue::Text(s) => Some(s.clone()),
-        DbValue::Null => None,
-        _ => None,
-    }
-}
-
-fn error_to_insert_error(e: Error) -> CollectorError {
-    match e {
-        Error::ConnectionFailure(e) => {
-            CollectorError::InsertError(format!("Connection failure: {}", e))
-        }
-        Error::QueryExecutionFailure(e) => {
-            CollectorError::InsertError(format!("Query execution failure: {}", e))
-        }
-        Error::QueryParameterFailure(e) => {
-            CollectorError::InsertError(format!("Query parameter failure: {}", e))
-        }
-        Error::QueryResponseFailure(e) => {
-            CollectorError::InsertError(format!("Query response failure: {}", e))
-        }
-        Error::Other(e) => CollectorError::InsertError(e),
-    }
-}
-
-fn error_to_fetch_error(e: Error) -> CollectorError {
-    match e {
-        Error::ConnectionFailure(e) => {
-            CollectorError::FetchError(format!("Connection failure: {}", e))
-        }
-        Error::QueryExecutionFailure(e) => {
-            CollectorError::FetchError(format!("Query execution failure: {}", e))
-        }
-        Error::QueryParameterFailure(e) => {
-            CollectorError::FetchError(format!("Query parameter failure: {}", e))
-        }
-        Error::QueryResponseFailure(e) => {
-            CollectorError::FetchError(format!("Query response failure: {}", e))
-        }
-        Error::Other(e) => CollectorError::FetchError(e),
-    }
-}
+const FETCH_LAST_ANALYSIS_TIMESTAMP_QUERY: &str =
+    "SELECT MAX(analysed_at) FROM analyses WHERE hostname = $1";
