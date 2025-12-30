@@ -1,7 +1,7 @@
 # Schema for IDEA:
-# $schema: https://schema.golem.cloud/app/golem/1.3.0/golem.schema.json
+# $schema: https://schema.golem.cloud/app/golem/1.4.2/golem.schema.json
 # Schema for vscode-yaml:
-# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.3.0/golem.schema.json
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.4.2/golem.schema.json
 
 # Field reference: https://learn.golem.cloud/app-manifest#field-reference
 # Creating HTTP APIs: https://learn.golem.cloud/invoke/making-custom-apis
@@ -23,7 +23,8 @@ httpApi:
               match result {
                 ok(count) => { status: 200, body: { success: true, message: "Collected ${count} entries" } },
                 err(insert-error(e)) => { status: 500, body: { success: false, message: "Collection failed: ${e}" } },
-                err(fetch-error(e)) => { status: 500, body: { success: false, message: "Collection failed: ${e}" } }
+                err(fetch-error(e)) => { status: 500, body: { success: false, message: "Collection failed: ${e}" } },
+                err(_) => { status: 500, body: { success: false, message: "Unexpected error" } },
               }
         - method: GET
           path: /entries/{hostname}
@@ -53,7 +54,7 @@ httpApi:
               let status = match result { ok((_, _)) => 200, _ => 500 };
               let success = match result { ok((_, _)) => true, _ => false };
               let results = match result { ok((e, c)) => some({ entries: e, count: c }), _ => none };
-              let error = match result { err(fetch-error(e)) => some("Fetch error: ${e}"), err(insert-error(e)) => some("Insert error: ${e}"), _ => none };
+              let error = match result { err(fetch-error(e)) => some("Fetch error: ${e}"), err(insert-error(e)) => some("Insert error: ${e}"), err(_) => some("Unexpected error"), _ => none };
               { 
                 status: status,
                 body: {
@@ -75,7 +76,7 @@ httpApi:
               let status = match result { ok(_) => 200, _ => 500 };
               let success = match result { ok(_) => true, _ => false };
               let results = match result { ok(e) => some(e), _ => none };
-              let error = match result { err(fetch-error(e)) => some("Fetch error: ${e}"), err(insert-error(e)) => some("Insert error: ${e}"), _ => none };
+              let error = match result { err(fetch-error(e)) => some("Fetch error: ${e}"), err(insert-error(e)) => some("Insert error: ${e}"), err(_) => some("Unexpected error"), _ => none };
               {
                 status: status,
                 body: {
@@ -95,7 +96,7 @@ httpApi:
 
 components:
   journai:collector:
-    templates: rust
+    templates: rust, common-env
 
     # Component environment variables can reference system environment variables with minijinja syntax:
     #
@@ -105,12 +106,6 @@ components:
     #     COMPOSED_VAR_3: "{{ ENV_VAR_3 }}-{{ ENV_VAR_4}}"
     #
     env:
-      DATABASE_TYPE: postgresql
-      DATABASE_INIT: "true"
-      DATABASE_HOST: host.docker.internal
-      DATABASE_USER: postgres
-      DATABASE_DB: postgres
-      DATABASE_PASSWORD: journai
     # LLM providers
     # -------------
 

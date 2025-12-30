@@ -107,3 +107,5 @@ GET http://journai.localhost:9006/entries/loki?since=1743859412&priority=3&conta
 ### Fetch error spikes
 
 GET http://journai.localhost:9006/errors/loki
+
+###

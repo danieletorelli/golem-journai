@@ -1,7 +1,13 @@
-use crate::database::{extract_float, extract_int_unsigned, extract_optional_text, extract_text};
-use golem_rust::bindings::golem::rdbms::postgres::{DbRow, DbValue, Error};
+use crate::database::{
+    extract_float, extract_int_unsigned, extract_optional_text, extract_short_unsigned,
+    extract_text,
+};
+use golem_rust::bindings::golem::rdbms::postgres;
+use golem_rust::golem_ai::golem::llm::llm;
 use golem_rust::Schema;
 use serde::{Deserialize, Serialize};
+
+pub type JournalEntryId = u64;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Schema)]
 pub struct JournalEntry {
@@ -78,8 +84,8 @@ impl PartialEq for JournalEntry {
 
 impl Eq for JournalEntry {}
 
-impl From<&DbRow> for JournalEntry {
-    fn from(row: &DbRow) -> Self {
+impl From<&postgres::DbRow> for JournalEntry {
+    fn from(row: &postgres::DbRow) -> Self {
         let values = &row.values;
         JournalEntry {
             boot_id: extract_text(&values[0]),
@@ -115,29 +121,50 @@ impl From<&DbRow> for JournalEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Schema)]
-pub enum CollectorError {
+pub enum APIError {
     InsertError(String),
     FetchError(String),
+    LLMError(String),
+    Other(String),
 }
 
-pub enum CollectorErrorType {
+pub enum APIErrorType {
     Insert,
     Fetch,
+    LLM,
 }
 
-impl CollectorErrorType {
-    pub fn wrap(self, error: Error) -> CollectorError {
+impl APIErrorType {
+    pub fn of_postgres(self, error: postgres::Error) -> APIError {
         let message = match &error {
-            Error::ConnectionFailure(e) => format!("Connection failure: {}", e),
-            Error::QueryExecutionFailure(e) => format!("Query execution failure: {}", e),
-            Error::QueryParameterFailure(e) => format!("Query parameter failure: {}", e),
-            Error::QueryResponseFailure(e) => format!("Query response failure: {}", e),
-            Error::Other(e) => e.clone(),
+            postgres::Error::ConnectionFailure(e) => format!("Connection failure: {}", e),
+            postgres::Error::QueryExecutionFailure(e) => format!("Query execution failure: {}", e),
+            postgres::Error::QueryParameterFailure(e) => format!("Query parameter failure: {}", e),
+            postgres::Error::QueryResponseFailure(e) => format!("Query response failure: {}", e),
+            postgres::Error::Other(e) => e.clone(),
         };
 
         match self {
-            CollectorErrorType::Insert => CollectorError::InsertError(message),
-            CollectorErrorType::Fetch => CollectorError::FetchError(message),
+            APIErrorType::Insert => APIError::InsertError(message),
+            APIErrorType::Fetch => APIError::FetchError(message),
+            _ => APIError::Other(message),
+        }
+    }
+
+    pub fn of_llm(self, error: llm::Error) -> APIError {
+        let message = format!("LLM error: {}", error);
+
+        match self {
+            APIErrorType::LLM => APIError::LLMError(message),
+            _ => APIError::Other(message),
+        }
+    }
+
+    pub fn of_string(self, message: String) -> APIError {
+        match self {
+            APIErrorType::Insert => APIError::InsertError(message),
+            APIErrorType::Fetch => APIError::FetchError(message),
+            _ => APIError::Other(message),
         }
     }
 }
@@ -147,14 +174,15 @@ pub struct ServiceErrors {
     pub hostname: String,
     pub service_name: String,
     pub error_count: u64,
+    pub min_priority: u8,
     pub started_at: f64,
     pub last_at: f64,
-    pub entries: Vec<u64>,
+    pub entries: Vec<JournalEntryId>,
 }
 
 pub struct ServiceErrorsBuilder<'a> {
     pub hostname: String,
-    pub row: &'a DbRow,
+    pub row: &'a postgres::DbRow,
 }
 
 impl From<ServiceErrorsBuilder<'_>> for ServiceErrors {
@@ -164,14 +192,15 @@ impl From<ServiceErrorsBuilder<'_>> for ServiceErrors {
             hostname: builder.hostname,
             service_name: extract_text(&values[0]),
             error_count: match &values[1] {
-                DbValue::Int8(i) => *i as u64,
-                DbValue::Int4(i) => *i as u64,
+                postgres::DbValue::Int8(i) => *i as u64,
+                postgres::DbValue::Int4(i) => *i as u64,
                 _ => 0,
             },
-            started_at: extract_float(&values[2]),
-            last_at: extract_float(&values[3]),
-            entries: match &values[4] {
-                DbValue::Array(arr) => arr
+            min_priority: extract_short_unsigned(&values[2]),
+            started_at: extract_float(&values[3]),
+            last_at: extract_float(&values[4]),
+            entries: match &values[5] {
+                postgres::DbValue::Array(arr) => arr
                     .iter()
                     .map(|item| item.get())
                     .map(|value| extract_int_unsigned(&value))
@@ -201,9 +230,4 @@ impl From<ServiceErrors> for ServiceErrorsNoEntries {
             last_at: value.last_at,
         }
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Schema)]
-pub enum AnalyzerError {
-    Error(String),
 }

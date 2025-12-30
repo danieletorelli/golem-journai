@@ -1,27 +1,26 @@
 use common_lib::database::*;
 use common_lib::model::{
-    CollectorError, CollectorErrorType, JournalEntry, ServiceErrors, ServiceErrorsBuilder,
+    APIError, APIErrorType, JournalEntry, ServiceErrors, ServiceErrorsBuilder,
 };
 use golem_rust::bindings::golem::rdbms::postgres::*;
 
 pub trait Database {
-    fn insert_entries(entries: Vec<JournalEntry>) -> Result<u64, CollectorError>;
+    fn insert_entries(entries: Vec<JournalEntry>) -> Result<u64, APIError>;
 
     fn get_entries(
         hostname: String,
         since: Option<f64>,
         priority: Option<u8>,
         message_contains: Option<String>,
-    ) -> Result<Vec<JournalEntry>, CollectorError>;
+    ) -> Result<Vec<JournalEntry>, APIError>;
 
-    fn get_last_analysis_timestamp(hostname: String) -> Result<Option<f64>, CollectorError>;
+    fn get_last_analysis_timestamp(hostname: String) -> Result<Option<f64>, APIError>;
 
-    fn get_error_spikes(hostname: String, since: f64)
-        -> Result<Vec<ServiceErrors>, CollectorError>;
+    fn get_error_spikes(hostname: String, since: f64) -> Result<Vec<ServiceErrors>, APIError>;
 }
 
 impl Database for PostgresDatabase {
-    fn insert_entries(entries: Vec<JournalEntry>) -> Result<u64, CollectorError> {
+    fn insert_entries(entries: Vec<JournalEntry>) -> Result<u64, APIError> {
         if entries.is_empty() {
             return Ok(0);
         }
@@ -88,10 +87,10 @@ impl Database for PostgresDatabase {
         log::debug!("Params: {:?}", params);
 
         let conn =
-            PostgresDatabase::open_connection().map_err(|e| CollectorErrorType::Insert.wrap(e))?;
-        PostgresDatabase::create_table(&conn).map_err(|e| CollectorErrorType::Insert.wrap(e))?;
+            PostgresDatabase::open_connection().map_err(|e| APIErrorType::Insert.of_postgres(e))?;
+        PostgresDatabase::create_table(&conn).map_err(|e| APIErrorType::Insert.of_postgres(e))?;
         conn.execute(&sql, params)
-            .map_err(|e| CollectorErrorType::Insert.wrap(e))
+            .map_err(|e| APIErrorType::Insert.of_postgres(e))
     }
 
     fn get_entries(
@@ -99,9 +98,9 @@ impl Database for PostgresDatabase {
         since: Option<f64>,
         priority: Option<u8>,
         message_contains: Option<String>,
-    ) -> Result<Vec<JournalEntry>, CollectorError> {
+    ) -> Result<Vec<JournalEntry>, APIError> {
         let conn =
-            PostgresDatabase::open_connection().map_err(|e| CollectorErrorType::Fetch.wrap(e))?;
+            PostgresDatabase::open_connection().map_err(|e| APIErrorType::Fetch.of_postgres(e))?;
 
         let mut conditions: Vec<String> = Vec::new();
         let mut params: Vec<DbValue> = vec![DbValue::Text(hostname)];
@@ -127,15 +126,15 @@ impl Database for PostgresDatabase {
         log::debug!("Query: {}", sql);
         log::debug!("Params: {:?}", params);
 
-        PostgresDatabase::create_table(&conn).map_err(|e| CollectorErrorType::Insert.wrap(e))?;
+        PostgresDatabase::create_table(&conn).map_err(|e| APIErrorType::Insert.of_postgres(e))?;
         conn.query(&sql, params)
             .map(|result| result.rows.iter().map(|r| r.into()).collect())
-            .map_err(|e| CollectorErrorType::Fetch.wrap(e))
+            .map_err(|e| APIErrorType::Fetch.of_postgres(e))
     }
 
-    fn get_last_analysis_timestamp(hostname: String) -> Result<Option<f64>, CollectorError> {
+    fn get_last_analysis_timestamp(hostname: String) -> Result<Option<f64>, APIError> {
         let conn =
-            PostgresDatabase::open_connection().map_err(|e| CollectorErrorType::Fetch.wrap(e))?;
+            PostgresDatabase::open_connection().map_err(|e| APIErrorType::Fetch.of_postgres(e))?;
         let params: Vec<DbValue> = vec![DbValue::Text(hostname)];
 
         log::debug!("Query: {}", FETCH_LAST_ANALYSIS_TIMESTAMP_QUERY);
@@ -143,15 +142,12 @@ impl Database for PostgresDatabase {
 
         conn.query(FETCH_LAST_ANALYSIS_TIMESTAMP_QUERY, params)
             .map(|result| result.rows.first().map(|row| extract_float(&row.values[0])))
-            .map_err(|e| CollectorErrorType::Fetch.wrap(e))
+            .map_err(|e| APIErrorType::Fetch.of_postgres(e))
     }
 
-    fn get_error_spikes(
-        hostname: String,
-        since: f64,
-    ) -> Result<Vec<ServiceErrors>, CollectorError> {
+    fn get_error_spikes(hostname: String, since: f64) -> Result<Vec<ServiceErrors>, APIError> {
         let conn =
-            PostgresDatabase::open_connection().map_err(|e| CollectorErrorType::Fetch.wrap(e))?;
+            PostgresDatabase::open_connection().map_err(|e| APIErrorType::Fetch.of_postgres(e))?;
         let params: Vec<DbValue> =
             vec![DbValue::Text(hostname.to_string()), DbValue::Float8(since)];
 
@@ -171,7 +167,7 @@ impl Database for PostgresDatabase {
                     })
                     .collect()
             })
-            .map_err(|e| CollectorErrorType::Fetch.wrap(e))
+            .map_err(|e| APIErrorType::Fetch.of_postgres(e))
     }
 }
 
@@ -192,13 +188,14 @@ const BASE_FETCH_QUERY: &str = r#"SELECT boot_id, hostname, machine_id, priority
 const FETCH_ERROR_SPIKES_QUERY: &str = r#"SELECT
     COALESCE(unit, syslog_identifier, comm, 'unknown') AS service_name,
     COUNT(*) AS error_count,
+    MIN(priority) AS min_priority,
     MIN(date) AS first_error,
     MAX(date) AS last_error,
     ARRAY_AGG(id ORDER BY date DESC) AS entry_ids
 FROM entries
 WHERE
     hostname = $1 AND date >= $2
-  AND CAST(priority AS INTEGER) <= 3
+  AND priority <= 3
 GROUP BY service_name
 HAVING COUNT(*) > 5
 ORDER BY error_count DESC;"#;

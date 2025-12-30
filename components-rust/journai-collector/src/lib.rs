@@ -17,7 +17,7 @@ impl Collector for CollectorImpl {
         Self { hostname }
     }
 
-    fn collect(&self, entries: Vec<JournalEntry>) -> Result<u64, CollectorError> {
+    fn collect(&self, entries: Vec<JournalEntry>) -> Result<u64, APIError> {
         let mut accepted_count: u64 = 0;
         let mut rejected_count: u64 = 0;
         let mut accepted_entries: Vec<JournalEntry> = Vec::new();
@@ -53,7 +53,7 @@ impl Collector for CollectorImpl {
         since: Option<f64>,
         priority: Option<u8>,
         message_contains: Option<String>,
-    ) -> Result<(Vec<JournalEntry>, u64), CollectorError> {
+    ) -> Result<(Vec<JournalEntry>, u64), APIError> {
         self.log_query_params(since, priority, &message_contains);
         PostgresDatabase::get_entries(self.hostname.to_string(), since, priority, message_contains)
             .map(|entries| {
@@ -62,7 +62,8 @@ impl Collector for CollectorImpl {
             })
     }
 
-    fn get_error_spikes(&self) -> Result<Vec<ServiceErrorsNoEntries>, CollectorError> {
+    fn get_error_spikes(&self) -> Result<Vec<ServiceErrorsNoEntries>, APIError> {
+        const ANALYSIS_WINDOW_DAYS: u8 = 14; // Used if no previous analysis has been performed
         let last_analysis_timestamp =
             PostgresDatabase::get_last_analysis_timestamp(self.hostname.to_string())?;
 
@@ -71,12 +72,27 @@ impl Collector for CollectorImpl {
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_secs_f64();
-            now - (14.0 * 24.0 * 60.0 * 60.0) // Last two-week timestamp
+            now - (ANALYSIS_WINDOW_DAYS as u64 * 86400) as f64
         });
 
-        let error_spikes = PostgresDatabase::get_error_spikes(self.hostname.to_string(), since);
+        let error_spikes = PostgresDatabase::get_error_spikes(self.hostname.to_string(), since)?;
 
-        error_spikes.map(|errors| errors.into_iter().map(|e| e.into()).collect())
+        // // TODO: Remove after testing
+        // let last = error_spikes.last().unwrap().to_owned();
+        // let sp = vec![last];
+        // // TODO: Remove after testing
+
+        let results: Vec<ServiceErrorsNoEntries> = error_spikes
+            .into_iter()
+            .map(|spike| {
+                log::debug!("Processing error spike: {:?}", spike);
+                AnalyzerClient::get(spike.hostname.to_string(), spike.service_name.to_string())
+                    .trigger_analyze_spike(spike.clone());
+                spike.into()
+            })
+            .collect();
+
+        Ok(results)
     }
 }
 

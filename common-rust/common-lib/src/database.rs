@@ -107,8 +107,9 @@ const CREATE_TABLES_QUERY: &[&str] = &[
     r#"CREATE TABLE IF NOT EXISTS analyses (
         id SERIAL PRIMARY KEY,
         hostname TEXT NOT NULL,
-        analysis_type TEXT,
-        summary TEXT,
+        analysis_type TEXT NOT NULL CHECK (analysis_type IN ('spike', 'report')),
+        model TEXT NOT NULL,
+        summary TEXT NOT NULL,
         analysed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP);"#,
     r#"CREATE TABLE IF NOT EXISTS analyzed_entries (
         entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
@@ -151,6 +152,16 @@ pub fn extract_int_unsigned(value: &DbValue) -> u64 {
     match value {
         DbValue::Int8(f) => *f as u64,
         DbValue::Int4(f) => *f as u64,
+        DbValue::Int2(f) => *f as u64,
+        _ => 0,
+    }
+}
+
+pub fn extract_short_unsigned(value: &DbValue) -> u8 {
+    match value {
+        DbValue::Int8(f) => *f as u8,
+        DbValue::Int4(f) => *f as u8,
+        DbValue::Int2(f) => *f as u8,
         _ => 0,
     }
 }

@@ -11,7 +11,7 @@ path = "src/lib.rs"
 common-lib = { path = "../../common-rust/common-lib" }
 
 log = { workspace = true }
-golem-rust = { workspace = true }
+golem-rust = { workspace = true, features = ["export_golem_agentic", "golem_ai"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 wstd = { workspace = true }
