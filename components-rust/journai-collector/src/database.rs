@@ -132,10 +132,13 @@ pub fn get_entries(
         .map_err(|e| APIErrorType::Fetch.of_postgres(e))
 }
 
-pub fn get_last_analysis_timestamp(hostname: String) -> Result<Option<f64>, APIError> {
+pub fn get_last_analysis_timestamp(
+    hostname: String,
+    model: String,
+) -> Result<Option<f64>, APIError> {
     let conn =
         PostgresDatabase::open_connection().map_err(|e| APIErrorType::Fetch.of_postgres(e))?;
-    let params: Vec<DbValue> = vec![DbValue::Text(hostname)];
+    let params: Vec<DbValue> = vec![DbValue::Text(hostname), DbValue::Text(model)];
 
     if should_log_queries() {
         log::debug!("Query: {}", FETCH_LAST_ANALYSIS_TIMESTAMP_QUERY);
@@ -205,4 +208,4 @@ HAVING COUNT(*) > 5
 ORDER BY error_count DESC;"#;
 
 const FETCH_LAST_ANALYSIS_TIMESTAMP_QUERY: &str =
-    "SELECT DATE_PART('epoch', MAX(analysed_at)) FROM analyses WHERE hostname = $1";
+    "SELECT DATE_PART('epoch', MAX(analysed_at)) FROM analyses WHERE hostname = $1 and model = $2";

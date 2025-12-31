@@ -3,6 +3,7 @@ mod database;
 use common_lib::model::*;
 use common_lib::*;
 use golem_rust::agent_implementation;
+use std::env;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 struct CollectorImpl {
@@ -57,7 +58,10 @@ impl Collector for CollectorImpl {
 
     fn get_error_spikes(&self) -> Result<Vec<ServiceErrorsNoEntries>, APIError> {
         let hostname = self.hostname.clone();
-        let since = database::get_last_analysis_timestamp(hostname.clone())?
+        let model = env::var("JOURNAI_LLM_MODEL").map_err(|_| {
+            APIErrorType::LLM.of_string("JOURNAI_LLM_MODEL env variable is not defined".to_string())
+        })?;
+        let since = database::get_last_analysis_timestamp(hostname.clone(), model.clone())?
             .unwrap_or_else(|| self.get_default_since_timestamp());
 
         database::get_error_spikes(hostname, since).map(|spikes| {
