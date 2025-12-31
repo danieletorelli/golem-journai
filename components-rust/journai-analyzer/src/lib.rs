@@ -4,6 +4,7 @@ use common_lib::model::{APIError, APIErrorType, ServiceErrors};
 use common_lib::Analyzer;
 use golem_rust::agent_implementation;
 use golem_rust::golem_ai::golem::llm::llm;
+use serde::{Deserialize, Serialize};
 use std::env;
 
 struct AnalyzerImpl {
@@ -21,71 +22,11 @@ impl Analyzer for AnalyzerImpl {
         let model = env::var("JOURNAI_LLM_MODEL").map_err(|_| {
             APIErrorType::LLM.of_string("JOURNAI_LLM_MODEL env variable is not defined".to_string())
         })?;
-        let entries_limit: u16 = env::var("JOURNAI_LLM_ENTRIES_LIMIT")
-            .ok()
-            .and_then(|limit| limit.parse().ok())
-            .unwrap_or(Self::LLM_ENTRIES_LIMIT_DEFAULT);
 
-        let entries = database::get_entries_by_ids(errors.entries.clone(), entries_limit)?;
-        let entries_json = entries
-            .iter()
-            .filter_map(|entry| serde_json::to_string(entry).ok())
-            .collect::<Vec<_>>()
-            .join("\n\n");
+        let (mut events, response_text) = self.execute_spike_summary_llm_call(&model, &errors)?;
+        let _assertion = self.execute_spike_structured_llm_call(&model, &mut events)?;
 
-        let user_prompt = self.compose_user_prompt(
-            errors.started_at,
-            errors.last_at,
-            errors.error_count,
-            entries_json,
-        );
-
-        let config = llm::Config {
-            model: model.clone(),
-            temperature: Some(0.2),
-            max_tokens: None,
-            stop_sequences: None,
-            tools: None,
-            tool_choice: None,
-            provider_options: Some(vec![llm::Kv {
-                key: "transformers".to_string(),
-                value: serde_json::to_value(vec!["middle-out"])
-                    .unwrap()
-                    .to_string(),
-            }]),
-        };
-
-        log::debug!("Sending request to LLM ({:?})", config);
-        let events = vec![
-            llm::Event::Message(llm::Message {
-                role: llm::Role::System,
-                name: None,
-                content: vec![llm::ContentPart::Text(Self::SYSTEM_PROMPT.to_string())],
-            }),
-            llm::Event::Message(llm::Message {
-                role: llm::Role::User,
-                name: Some("JournAI".to_string()),
-                content: vec![llm::ContentPart::Text(user_prompt)],
-            }),
-        ];
-
-        let response = llm::send(&events, &config).map_err(|e| {
-            log::error!("Error: {:?}", e);
-            APIErrorType::LLM.of_llm(e)
-        })?;
-
-        let response_text: String = response
-            .content
-            .iter()
-            .filter_map(|content_part| match content_part {
-                llm::ContentPart::Text(txt) if !txt.is_empty() => Some(txt.clone()),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        if !response_text.is_empty() {
-            log::debug!("LLM Response: {:?}", response);
+        if !response_text.trim().is_empty() {
             database::insert_analysis(
                 self.hostname.clone(),
                 "spike".to_string(),
@@ -101,14 +42,35 @@ impl Analyzer for AnalyzerImpl {
     }
 }
 
+//derive for json usage
+
+#[derive(Debug, Serialize, Deserialize)]
+enum EventSeverity {
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct EventAssertion {
+    severity: EventSeverity,
+    needs_user_action: bool,
+}
+
 impl AnalyzerImpl {
     const LLM_ENTRIES_LIMIT_DEFAULT: u16 = 500;
-    const SYSTEM_PROMPT: &str = r#"You are an expert Senior Site Reliability Engineer (SRE).
+    const SPIKE_SUMMARY_SYSTEM_PROMPT: &str = r#"You are an expert Senior Site Reliability Engineer (SRE).
         Your task is to analyze systemd journal entries to identify the root cause of service failures or error spikes.
         Provide a professional, technical, and concise analysis for on-call engineers.
         Focus on identifying patterns, specific error codes, and sequence of events.
         Always conclude with a 'Next Steps' checklist of concrete, actionable troubleshooting steps."#;
-    fn compose_user_prompt(
+    const SPIKE_STRUCTURED_SYSTEM_PROMPT: &str = r#"You are an expert Senior Site Reliability Engineer (SRE).
+        Your task is to analyze systemd journal entries to identify the root cause of service failures or error spikes.
+        Provide a structured response in JSON format."#;
+    const SPIKE_STRUCTURED_USER_PROMPT: &str = "How critical is this error spike?";
+
+    fn compose_spike_summary_user_prompt(
         &self,
         start: f64,
         end: f64,
@@ -135,5 +97,151 @@ impl AnalyzerImpl {
             errors_count = errors_count,
             errors = errors,
         )
+    }
+
+    fn execute_spike_summary_llm_call(
+        &self,
+        model: &str,
+        errors: &ServiceErrors,
+    ) -> Result<(Vec<llm::Event>, String), APIError> {
+        let entries_limit: u16 = env::var("JOURNAI_LLM_ENTRIES_LIMIT")
+            .ok()
+            .and_then(|limit| limit.parse().ok())
+            .unwrap_or(Self::LLM_ENTRIES_LIMIT_DEFAULT);
+
+        let entries = database::get_entries_by_ids(errors.entries.clone(), entries_limit)?;
+        let entries_json = entries
+            .iter()
+            .filter_map(|entry| serde_json::to_string(entry).ok())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+
+        let user_prompt = self.compose_spike_summary_user_prompt(
+            errors.started_at,
+            errors.last_at,
+            errors.error_count,
+            entries_json,
+        );
+
+        let config = llm::Config {
+            model: model.to_string(),
+            temperature: Some(0.2),
+            max_tokens: None,
+            stop_sequences: None,
+            tools: None,
+            tool_choice: None,
+            provider_options: Some(vec![llm::Kv {
+                key: "transformers".to_string(),
+                value: serde_json::to_value(vec!["middle-out"])
+                    .unwrap()
+                    .to_string(),
+            }]),
+        };
+
+        log::debug!("Sending request to LLM ({:?})", config);
+        let mut events = vec![
+            llm::Event::Message(llm::Message {
+                role: llm::Role::System,
+                name: None,
+                content: vec![llm::ContentPart::Text(
+                    Self::SPIKE_SUMMARY_SYSTEM_PROMPT.to_string(),
+                )],
+            }),
+            llm::Event::Message(llm::Message {
+                role: llm::Role::User,
+                name: Some("JournAI".to_string()),
+                content: vec![llm::ContentPart::Text(user_prompt)],
+            }),
+        ];
+
+        let response = llm::send(&events, &config)
+            .map(|r| {
+                log::debug!("LLM Response: {:?}", r);
+                events.push(llm::Event::Response(r.clone()));
+                r
+            })
+            .map_err(|e| {
+                log::error!("Error: {:?}", e);
+                APIErrorType::LLM.of_llm(e)
+            })?;
+
+        let response_text = response
+            .content
+            .iter()
+            .filter_map(|content_part| match content_part {
+                llm::ContentPart::Text(txt) if !txt.trim().is_empty() => Some(txt.trim()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        Ok((events, response_text))
+    }
+
+    fn execute_spike_structured_llm_call(
+        &self,
+        model: &str,
+        events: &mut Vec<llm::Event>,
+    ) -> Result<EventAssertion, APIError> {
+        let config = llm::Config {
+            model: model.to_string(),
+            temperature: Some(0.2),
+            max_tokens: None,
+            stop_sequences: None,
+            tools: None,
+            tool_choice: None,
+            provider_options: Some(vec![llm::Kv {
+                key: "transformers".to_string(),
+                value: serde_json::to_value(vec!["middle-out"])
+                    .unwrap()
+                    .to_string(),
+            }]),
+        };
+
+        log::debug!("Sending request to LLM ({:?})", config);
+        events.extend(vec![
+            llm::Event::Message(llm::Message {
+                role: llm::Role::System,
+                name: None,
+                content: vec![llm::ContentPart::Text(
+                    Self::SPIKE_STRUCTURED_SYSTEM_PROMPT.to_string(),
+                )],
+            }),
+            llm::Event::Message(llm::Message {
+                role: llm::Role::User,
+                name: Some("JournAI".to_string()),
+                content: vec![llm::ContentPart::Text(
+                    Self::SPIKE_STRUCTURED_USER_PROMPT.to_string(),
+                )],
+            }),
+        ]);
+
+        let response = llm::send(&events, &config)
+            .map(|r| {
+                log::debug!("LLM Response: {:?}", r);
+                r
+            })
+            .map_err(|e| {
+                log::error!("Error: {:?}", e);
+                APIErrorType::LLM.of_llm(e)
+            })?;
+
+        let assertion = serde_json::from_str(
+            &response
+                .content
+                .iter()
+                .filter_map(|content_part| match content_part {
+                    llm::ContentPart::Text(txt) if !txt.trim().is_empty() => Some(txt.trim()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join(""),
+        )
+        .map_err(|e| {
+            log::error!("Error parsing LLM response: {:?}", e);
+            APIError::Other(format!("Error parsing LLM response: {:?}", e))
+        })?;
+
+        Ok(assertion)
     }
 }
