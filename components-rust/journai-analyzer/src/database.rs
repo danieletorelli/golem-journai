@@ -1,5 +1,7 @@
 use common_lib::database::*;
-use common_lib::model::{APIError, APIErrorType, JournalEntry, JournalEntryId};
+use common_lib::model::{
+    APIError, APIErrorType, JournalEntry, JournalEntryId, SpikeEventAssertion,
+};
 use golem_rust::bindings::golem::rdbms::postgres::*;
 
 pub fn get_entries_by_ids(
@@ -53,6 +55,7 @@ pub fn insert_analysis(
     analysis_type: String,
     model: String,
     summary: String,
+    assertion: SpikeEventAssertion,
     entry_ids: Vec<JournalEntryId>,
 ) -> Result<u64, APIError> {
     if entry_ids.is_empty() {
@@ -65,16 +68,17 @@ pub fn insert_analysis(
     let conn =
         PostgresDatabase::open_connection().map_err(|e| APIErrorType::Fetch.of_postgres(e))?;
 
-    let insert_analysis_sql = r#"INSERT INTO analyses (hostname, analysis_type, model, summary) VALUES ($1, $2, $3, $4) RETURNING id"#;
     let insert_analysis_params = vec![
         DbValue::Text(hostname),
         DbValue::Text(analysis_type),
         DbValue::Text(model),
         DbValue::Text(summary),
+        DbValue::Text(assertion.severity.to_string()),
+        DbValue::Boolean(assertion.needs_user_action),
     ];
 
     if should_log_queries() {
-        log::debug!("Query: {}", insert_analysis_sql);
+        log::debug!("Query: {}", INSERT_ANALYSIS_QUERY);
         log::trace!("Params: {:?}", insert_analysis_params);
     }
 
@@ -88,7 +92,7 @@ pub fn insert_analysis(
     };
 
     let result = conn
-        .query(insert_analysis_sql, insert_analysis_params)
+        .query(INSERT_ANALYSIS_QUERY, insert_analysis_params)
         .map_err(|e| rollback_and_error(APIErrorType::Fetch.of_postgres(e)))?;
 
     let analysis_id: u64 = result
@@ -142,3 +146,5 @@ const BASE_FETCH_QUERY: &str = r#"SELECT boot_id, hostname, machine_id, priority
     comm, exe, cmdline, unit, systemd_unit, systemd_slice, systemd_cgroup,
     code_line, code_file, job_id, job_result, job_type, invocation_id,
     source_monotonic_timestamp, source_boottime_timestamp FROM entries"#;
+
+const INSERT_ANALYSIS_QUERY: &str = r#"INSERT INTO analyses (hostname, analysis_type, model, summary, severity, needs_user_action) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id"#;

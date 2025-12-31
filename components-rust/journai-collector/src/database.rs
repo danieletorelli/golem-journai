@@ -205,4 +205,4 @@ HAVING COUNT(*) > 5
 ORDER BY error_count DESC;"#;
 
 const FETCH_LAST_ANALYSIS_TIMESTAMP_QUERY: &str =
-    "SELECT MAX(analysed_at) FROM analyses WHERE hostname = $1";
+    "SELECT DATE_PART('epoch', MAX(analysed_at)) FROM analyses WHERE hostname = $1";

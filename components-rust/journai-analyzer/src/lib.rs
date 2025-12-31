@@ -1,10 +1,9 @@
 mod database;
 
-use common_lib::model::{APIError, APIErrorType, ServiceErrors};
+use common_lib::model::{APIError, APIErrorType, ServiceErrors, SpikeEventAssertion};
 use common_lib::Analyzer;
 use golem_rust::agent_implementation;
 use golem_rust::golem_ai::golem::llm::llm;
-use serde::{Deserialize, Serialize};
 use std::env;
 
 struct AnalyzerImpl {
@@ -23,39 +22,25 @@ impl Analyzer for AnalyzerImpl {
             APIErrorType::LLM.of_string("JOURNAI_LLM_MODEL env variable is not defined".to_string())
         })?;
 
-        let (mut events, response_text) = self.execute_spike_summary_llm_call(&model, &errors)?;
-        let _assertion = self.execute_spike_structured_llm_call(&model, &mut events)?;
+        let (mut events, spike_event_summary) =
+            self.execute_spike_summary_llm_call(&model, &errors)?;
+        let spike_event_assertion = self.execute_spike_structured_llm_call(&model, &mut events)?;
 
-        if !response_text.trim().is_empty() {
+        if !spike_event_summary.trim().is_empty() {
             database::insert_analysis(
                 self.hostname.clone(),
                 "spike".to_string(),
                 model,
-                response_text.clone(),
+                spike_event_summary.clone(),
+                spike_event_assertion,
                 errors.entries,
             )?;
-            Ok(response_text)
+            Ok(spike_event_summary)
         } else {
             log::error!("Error: Analysis response was empty");
             Err(APIErrorType::LLM.of_string("Analysis response was empty".to_string()))
         }
     }
-}
-
-//derive for json usage
-
-#[derive(Debug, Serialize, Deserialize)]
-enum EventSeverity {
-    Low,
-    Medium,
-    High,
-    Critical,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct EventAssertion {
-    severity: EventSeverity,
-    needs_user_action: bool,
 }
 
 impl AnalyzerImpl {
@@ -64,10 +49,13 @@ impl AnalyzerImpl {
         Your task is to analyze systemd journal entries to identify the root cause of service failures or error spikes.
         Provide a professional, technical, and concise analysis for on-call engineers.
         Focus on identifying patterns, specific error codes, and sequence of events.
+        Convert to human readable timestamps the raw seconds from epoch that you find.
         Always conclude with a 'Next Steps' checklist of concrete, actionable troubleshooting steps."#;
     const SPIKE_STRUCTURED_SYSTEM_PROMPT: &str = r#"You are an expert Senior Site Reliability Engineer (SRE).
         Your task is to analyze systemd journal entries to identify the root cause of service failures or error spikes.
-        Provide a structured response in JSON format."#;
+        Provide a structured response in compact (no spaces, new lines and so on) JSON format.
+        Do not include any additional text, formatting or explanations.
+        This is VERY IMPORTANT as I need to parse this response and I need a strict JSON."#;
     const SPIKE_STRUCTURED_USER_PROMPT: &str = "How critical is this error spike?";
 
     fn compose_spike_summary_user_prompt(
@@ -130,12 +118,7 @@ impl AnalyzerImpl {
             stop_sequences: None,
             tools: None,
             tool_choice: None,
-            provider_options: Some(vec![llm::Kv {
-                key: "transformers".to_string(),
-                value: serde_json::to_value(vec!["middle-out"])
-                    .unwrap()
-                    .to_string(),
-            }]),
+            provider_options: None,
         };
 
         log::debug!("Sending request to LLM ({:?})", config);
@@ -182,7 +165,31 @@ impl AnalyzerImpl {
         &self,
         model: &str,
         events: &mut Vec<llm::Event>,
-    ) -> Result<EventAssertion, APIError> {
+    ) -> Result<SpikeEventAssertion, APIError> {
+        let response_format = serde_json::json!({
+            "type": "json_schema",
+            "json_schema": {
+                "name": "event_assertion",
+                "strict": true,
+                "schema": serde_json::json!({
+            "type": "object",
+            "properties": {
+                "severity": {
+                    "type": "string",
+                    "description": "The severity of the error spike. It's critical only if the system can't start without fixing the issue. It's high only if it needs to be addressed quickly or it will create problems in the immediate future. It's low if it can be ignored or handled later, especially if the errors are happening from a while. Otherwise, it's medium.",
+                    "enum": ["Low", "Medium", "High", "Critical"]
+                },
+                "needs_user_action": {
+                    "type": "boolean",
+                    "description": "Indicates if the error spike requires immediate user intervention."
+                }
+            },
+            "required": ["severity", "needs_user_action"],
+            "additionalProperties": false
+        })
+            }
+        });
+
         let config = llm::Config {
             model: model.to_string(),
             temperature: Some(0.2),
@@ -190,22 +197,20 @@ impl AnalyzerImpl {
             stop_sequences: None,
             tools: None,
             tool_choice: None,
-            provider_options: Some(vec![llm::Kv {
-                key: "transformers".to_string(),
-                value: serde_json::to_value(vec!["middle-out"])
-                    .unwrap()
-                    .to_string(),
-            }]),
+            provider_options: None,
         };
 
         log::debug!("Sending request to LLM ({:?})", config);
+        events.retain(|event| matches!(event, llm::Event::Response(_)));
         events.extend(vec![
             llm::Event::Message(llm::Message {
                 role: llm::Role::System,
                 name: None,
-                content: vec![llm::ContentPart::Text(
-                    Self::SPIKE_STRUCTURED_SYSTEM_PROMPT.to_string(),
-                )],
+                content: vec![llm::ContentPart::Text(format!(
+                    "{}\n{}",
+                    Self::SPIKE_STRUCTURED_SYSTEM_PROMPT,
+                    response_format
+                ))],
             }),
             llm::Event::Message(llm::Message {
                 role: llm::Role::User,
@@ -216,7 +221,7 @@ impl AnalyzerImpl {
             }),
         ]);
 
-        let response = llm::send(&events, &config)
+        let response = llm::send(events, &config)
             .map(|r| {
                 log::debug!("LLM Response: {:?}", r);
                 r
@@ -235,10 +240,16 @@ impl AnalyzerImpl {
                     _ => None,
                 })
                 .collect::<Vec<_>>()
-                .join(""),
+                .join("")
+                .replace("```json", "")
+                .replace("```", "")
+                .trim()
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .collect::<String>(),
         )
         .map_err(|e| {
-            log::error!("Error parsing LLM response: {:?}", e);
+            log::error!("Error parsing LLM response: {:?}\nError: {:?}", response, e);
             APIError::Other(format!("Error parsing LLM response: {:?}", e))
         })?;
 

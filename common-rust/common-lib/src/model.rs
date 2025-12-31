@@ -217,3 +217,29 @@ impl From<ServiceErrors> for ServiceErrorsNoEntries {
         }
     }
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum SpikeEventSeverity {
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+impl std::fmt::Display for SpikeEventSeverity {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let s = match self {
+            SpikeEventSeverity::Low => "Low",
+            SpikeEventSeverity::Medium => "Medium",
+            SpikeEventSeverity::High => "High",
+            SpikeEventSeverity::Critical => "Critical",
+        };
+        write!(f, "{}", s)
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SpikeEventAssertion {
+    pub severity: SpikeEventSeverity,
+    pub needs_user_action: bool,
+}

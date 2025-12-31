@@ -66,7 +66,7 @@ impl Collector for CollectorImpl {
                 .map(|spike| {
                     log::debug!("Processing error spike for service: {}", spike.service_name);
 
-                    AnalyzerClient::get(spike.hostname.clone(), spike.service_name.clone())
+                    AnalyzerClient::new_phantom(spike.hostname.clone(), spike.service_name.clone())
                         .trigger_analyze_spike(spike.clone());
 
                     ServiceErrorsNoEntries::from(spike)

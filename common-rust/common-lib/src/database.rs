@@ -113,6 +113,8 @@ const CREATE_TABLES_QUERY: &[&str] = &[
         analysis_type TEXT NOT NULL CHECK (analysis_type IN ('spike', 'report')),
         model TEXT NOT NULL CHECK (btrim(model) <> ''),
         summary TEXT NOT NULL CHECK (btrim(summary) <> ''),
+        severity TEXT NOT NULL CHECK (severity IN ('Low', 'Medium', 'High', 'Critical')),
+        needs_user_action BOOLEAN NOT NULL,
         analysed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP);"#,
     r#"CREATE TABLE IF NOT EXISTS analyzed_entries (
         entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
