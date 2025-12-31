@@ -3,30 +3,34 @@ use std::env;
 
 pub struct PostgresDatabase;
 
+pub const MAX_PARAMS: usize = 65535;
+
+pub fn should_log_queries() -> bool {
+    env::var("DATABASE_QUERY_LOG").is_ok_and(|v| v == "true")
+}
+
 impl PostgresDatabase {
     pub fn open_connection() -> Result<DbConnection, Error> {
-        if env::var("DATABASE_TYPE").unwrap_or_else(|_| "none".to_string()) != "postgresql" {
+        if env::var("DATABASE_TYPE").unwrap_or_default() != "postgresql" {
             return Err(Error::ConnectionFailure(
                 "PostgreSQL was not selected as database type".to_string(),
             ));
         }
 
         let user = env::var("DATABASE_USER").unwrap_or_else(|_| "journai".to_string());
-        let password = env::var("DATABASE_PASSWORD").unwrap_or_else(|_| "".to_string());
+        let password = env::var("DATABASE_PASSWORD").ok();
         let host = env::var("DATABASE_HOST").unwrap_or_else(|_| "localhost".to_string());
         let port = env::var("DATABASE_PORT").unwrap_or_else(|_| "5432".to_string());
         let db = env::var("DATABASE_DB").unwrap_or_else(|_| "journai".to_string());
 
-        let url = if password.is_empty() {
-            format!("postgres://{}@{}:{}/{}", user, host, port, db)
-        } else {
-            format!("postgres://{}:{}@{}:{}/{}", user, password, host, port, db)
+        let url = match &password {
+            Some(p) => format!("postgres://{}:{}@{}:{}/{}", user, p, host, port, db),
+            None => format!("postgres://{}@{}:{}/{}", user, host, port, db),
         };
 
-        let masked_url = if password.is_empty() {
-            format!("postgres://{}@{}:{}/{}", user, host, port, db)
-        } else {
-            format!("postgres://{}:***@{}:{}/{}", user, host, port, db)
+        let masked_url = match &password {
+            Some(_) => format!("postgres://{}:***@{}:{}/{}", user, host, port, db),
+            None => format!("postgres://{}@{}:{}/{}", user, host, port, db),
         };
 
         log::debug!("Connecting to {}", masked_url);
@@ -37,6 +41,11 @@ impl PostgresDatabase {
                     log::error!("Connection test failed: {:?}", e);
                     return Err(e);
                 }
+
+                if env::var("DATABASE_INIT").is_ok_and(|v| v == "true") {
+                    Self::create_table(&conn)?;
+                }
+
                 Ok(conn)
             }
             Err(e) => {
@@ -46,22 +55,16 @@ impl PostgresDatabase {
         }
     }
 
-    pub fn create_table(connection: &DbConnection) -> Result<(), Error> {
-        if env::var("DATABASE_INIT").unwrap_or_else(|_| "false".to_string()) != "true" {
-            return Ok(());
-        }
-
+    fn create_table(connection: &DbConnection) -> Result<(), Error> {
         log::debug!("Initializing database");
 
         let transaction = connection.begin_transaction()?;
 
-        let all_queries = CREATE_TABLES_QUERY
-            .iter()
-            .chain(CREATE_INDEXES_QUERIES.iter());
+        let all_queries = CREATE_TABLES_QUERY.iter().chain(CREATE_INDEXES_QUERIES);
 
         for query in all_queries {
             if let Err(e) = connection.execute(query, vec![]) {
-                log::error!("Failed to execute query: {:?}", e);
+                log::error!("Failed to execute query: {:?}. Query: {}", e, query);
                 let _ = transaction.rollback();
                 return Err(e);
             }
@@ -76,13 +79,13 @@ impl PostgresDatabase {
 const CREATE_TABLES_QUERY: &[&str] = &[
     r#"CREATE TABLE IF NOT EXISTS entries (
         id SERIAL PRIMARY KEY,
-        boot_id TEXT NOT NULL,
-        hostname TEXT NOT NULL,
-        machine_id TEXT NOT NULL,
+        boot_id TEXT NOT NULL CHECK (btrim(boot_id) <> ''),
+        hostname TEXT NOT NULL CHECK (btrim(hostname) <> ''),
+        machine_id TEXT NOT NULL CHECK (btrim(machine_id) <> ''),
         priority SMALLINT NOT NULL CHECK (priority BETWEEN 0 AND 7),
-        message TEXT NOT NULL,
+        message TEXT NOT NULL CHECK (btrim(message) <> ''),
         date DOUBLE PRECISION NOT NULL,
-        runtime_scope TEXT NOT NULL,
+        runtime_scope TEXT NOT NULL CHECK (btrim(runtime_scope) <> ''),
         pid TEXT,
         uid TEXT,
         gid TEXT,
@@ -106,10 +109,10 @@ const CREATE_TABLES_QUERY: &[&str] = &[
         source_boottime_timestamp TEXT);"#,
     r#"CREATE TABLE IF NOT EXISTS analyses (
         id SERIAL PRIMARY KEY,
-        hostname TEXT NOT NULL,
+        hostname TEXT NOT NULL CHECK (btrim(hostname) <> ''),
         analysis_type TEXT NOT NULL CHECK (analysis_type IN ('spike', 'report')),
-        model TEXT NOT NULL,
-        summary TEXT NOT NULL,
+        model TEXT NOT NULL CHECK (btrim(model) <> ''),
+        summary TEXT NOT NULL CHECK (btrim(summary) <> ''),
         analysed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP);"#,
     r#"CREATE TABLE IF NOT EXISTS analyzed_entries (
         entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
@@ -121,55 +124,91 @@ const CREATE_INDEXES_QUERIES: &[&str] = &[
     r#"CREATE EXTENSION IF NOT EXISTS pg_trgm;"#,
     r#"CREATE UNIQUE INDEX IF NOT EXISTS idx_entries_unique
        ON entries(boot_id, hostname, machine_id, md5(message), COALESCE(pid, ''), COALESCE(uid, ''), COALESCE(gid, ''), date);"#,
-    r#"CREATE INDEX IF NOT EXISTS idx_entries_date ON entries(date);"#,
-    r#"CREATE INDEX IF NOT EXISTS idx_entries_priority ON entries(priority);"#,
-    r#"CREATE INDEX IF NOT EXISTS idx_entries_hostname ON entries(hostname);"#,
-    r#"CREATE INDEX IF NOT EXISTS idx_entries_hostname_date ON entries(hostname, date DESC);"#,
-    r#"CREATE INDEX IF NOT EXISTS idx_entries_message ON entries USING GIN(message gin_trgm_ops);"#,
-    r#"CREATE INDEX IF NOT EXISTS idx_entries_hostname_priority ON entries(hostname, priority);"#,
     r#"CREATE INDEX IF NOT EXISTS idx_entries_hostname_date_priority ON entries(hostname, date DESC, priority);"#,
-    r#"CREATE INDEX IF NOT EXISTS idx_analyses_hostname ON analyses(hostname);"#,
+    r#"CREATE INDEX IF NOT EXISTS idx_entries_message ON entries USING GIN(message gin_trgm_ops);"#,
     r#"CREATE INDEX IF NOT EXISTS idx_analyses_hostname_analysed_at ON analyses(hostname, analysed_at DESC);"#,
     r#"CREATE INDEX IF NOT EXISTS idx_analyzed_entries_analysis_id ON analyzed_entries(analysis_id);"#,
 ];
 
-pub fn extract_text(value: &DbValue) -> String {
-    match value {
-        DbValue::Text(s) => s.clone(),
-        _ => String::new(),
+pub trait FromDbValue: Sized {
+    fn from_db_value(value: &DbValue) -> Self;
+}
+
+impl FromDbValue for String {
+    fn from_db_value(value: &DbValue) -> Self {
+        match value {
+            DbValue::Text(s) => s.clone(),
+            _ => String::new(),
+        }
     }
 }
 
-pub fn extract_float(value: &DbValue) -> f64 {
-    match value {
-        DbValue::Float8(f) => *f,
-        DbValue::Float4(f) => *f as f64,
-        _ => 0.0,
+impl FromDbValue for i16 {
+    fn from_db_value(value: &DbValue) -> Self {
+        match value {
+            DbValue::Int2(i) => *i,
+            DbValue::Int4(i) => *i as i16,
+            DbValue::Int8(i) => *i as i16,
+            _ => 0,
+        }
     }
 }
 
-pub fn extract_int_unsigned(value: &DbValue) -> u64 {
-    match value {
-        DbValue::Int8(f) => *f as u64,
-        DbValue::Int4(f) => *f as u64,
-        DbValue::Int2(f) => *f as u64,
-        _ => 0,
+impl FromDbValue for f64 {
+    fn from_db_value(value: &DbValue) -> Self {
+        match value {
+            DbValue::Float8(f) => *f,
+            DbValue::Float4(f) => *f as f64,
+            _ => 0.0,
+        }
     }
 }
 
-pub fn extract_short_unsigned(value: &DbValue) -> u8 {
-    match value {
-        DbValue::Int8(f) => *f as u8,
-        DbValue::Int4(f) => *f as u8,
-        DbValue::Int2(f) => *f as u8,
-        _ => 0,
+impl FromDbValue for u64 {
+    fn from_db_value(value: &DbValue) -> Self {
+        match value {
+            DbValue::Int8(i) => *i as u64,
+            DbValue::Int4(i) => *i as u64,
+            DbValue::Int2(i) => *i as u64,
+            DbValue::Float8(f) => *f as u64,
+            _ => 0,
+        }
     }
 }
 
-pub fn extract_optional_text(value: &DbValue) -> Option<String> {
-    match value {
-        DbValue::Text(s) => Some(s.clone()),
-        DbValue::Null => None,
-        _ => None,
+impl FromDbValue for u8 {
+    fn from_db_value(value: &DbValue) -> Self {
+        match value {
+            DbValue::Int2(i) => *i as u8,
+            DbValue::Int4(i) => *i as u8,
+            DbValue::Int8(i) => *i as u8,
+            DbValue::Float8(f) => *f as u8,
+            _ => 0,
+        }
     }
+}
+
+impl FromDbValue for Option<String> {
+    fn from_db_value(value: &DbValue) -> Self {
+        match value {
+            DbValue::Text(s) => Some(s.clone()),
+            _ => None,
+        }
+    }
+}
+
+impl<T: FromDbValue> FromDbValue for Vec<T> {
+    fn from_db_value(value: &DbValue) -> Self {
+        match value {
+            DbValue::Array(arr) => arr
+                .iter()
+                .map(|item| T::from_db_value(&item.get()))
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+}
+
+pub fn extract<T: FromDbValue>(value: &DbValue) -> T {
+    T::from_db_value(value)
 }

@@ -60,6 +60,7 @@ componentTemplates:
       DATABASE_USER: postgres
       DATABASE_DB: postgres
       DATABASE_PASSWORD: journai
+      DATABASE_QUERY_LOG: "false"
     presets:
       debug:
         dependencies:
@@ -70,8 +71,9 @@ componentTemplates:
         env:
           RUST_LOG: debug
           GOLEM_LLM_LOG: debug
+          GOLEM_AI_LOG: debug
           OPENROUTER_API_KEY: "{{ OPENROUTER_API_KEY }}"
-          JOURNAI_MODEL: "xiaomi/mimo-v2-flash:free"
+          JOURNAI_LLM_MODEL: "xiaomi/mimo-v2-flash:free"
           # GOLEM_OLLAMA_BASE_URL: "http://model-runner.docker.internal/"
           # JOURNAI_MODEL: "ai/gpt-oss"
       release:
@@ -81,8 +83,10 @@ componentTemplates:
         env:
           RUST_LOG: info
           GOLEM_LLM_LOG: warn
+          GOLEM_AI_LOG: warn
           OPENROUTER_API_KEY: "{{ OPENROUTER_API_KEY }}"
-          JOURNAI_MODEL: "perplexity/sonar-pro"
+          JOURNAI_LLM_MODEL: "perplexity/sonar-pro"
+          JOURNAI_LLM_ENTRIES_LIMIT: "10000"
 customCommands:
   cargo-clean:
     - command: cargo clean

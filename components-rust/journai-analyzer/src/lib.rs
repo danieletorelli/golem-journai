@@ -1,9 +1,7 @@
 mod database;
 
-use common_lib::database::PostgresDatabase;
 use common_lib::model::{APIError, APIErrorType, ServiceErrors};
 use common_lib::Analyzer;
-use database::Database;
 use golem_rust::agent_implementation;
 use golem_rust::golem_ai::golem::llm::llm;
 use std::env;
@@ -20,11 +18,15 @@ impl Analyzer for AnalyzerImpl {
     }
 
     async fn analyze_spike(&self, errors: ServiceErrors) -> Result<String, APIError> {
-        let model = env::var("JOURNAI_MODEL").map_err(|_| {
-            APIErrorType::LLM.of_string("JOURNAI_MODEL env variable is not defined".to_string())
+        let model = env::var("JOURNAI_LLM_MODEL").map_err(|_| {
+            APIErrorType::LLM.of_string("JOURNAI_LLM_MODEL env variable is not defined".to_string())
         })?;
-        let entry_ids = errors.entries.clone();
-        let entries = PostgresDatabase::get_entries(entry_ids)?;
+        let entries_limit: u16 = env::var("JOURNAI_LLM_ENTRIES_LIMIT")
+            .ok()
+            .and_then(|limit| limit.parse().ok())
+            .unwrap_or(Self::LLM_ENTRIES_LIMIT_DEFAULT);
+
+        let entries = database::get_entries_by_ids(errors.entries.clone(), entries_limit)?;
         let entries_json = entries
             .iter()
             .filter_map(|entry| serde_json::to_string(entry).ok())
@@ -39,16 +41,21 @@ impl Analyzer for AnalyzerImpl {
         );
 
         let config = llm::Config {
-            model: model.to_string(),
+            model: model.clone(),
             temperature: Some(0.2),
-            max_tokens: Some(131000),
+            max_tokens: None,
             stop_sequences: None,
             tools: None,
             tool_choice: None,
-            provider_options: None,
+            provider_options: Some(vec![llm::Kv {
+                key: "transformers".to_string(),
+                value: serde_json::to_value(vec!["middle-out"])
+                    .unwrap()
+                    .to_string(),
+            }]),
         };
 
-        log::debug!("Sending request to LLM...");
+        log::debug!("Sending request to LLM ({:?})", config);
         let events = vec![
             llm::Event::Message(llm::Message {
                 role: llm::Role::System,
@@ -62,34 +69,45 @@ impl Analyzer for AnalyzerImpl {
             }),
         ];
 
-        let response = llm::send(&events, &config).map_err(|e| APIErrorType::LLM.of_llm(e))?;
-        log::debug!("LLM Response: {:?}", response);
+        let response = llm::send(&events, &config).map_err(|e| {
+            log::error!("Error: {:?}", e);
+            APIErrorType::LLM.of_llm(e)
+        })?;
 
-        let response_text = response
+        let response_text: String = response
             .content
             .iter()
             .filter_map(|content_part| match content_part {
-                llm::ContentPart::Text(txt) => Some(txt.clone()),
+                llm::ContentPart::Text(txt) if !txt.is_empty() => Some(txt.clone()),
                 _ => None,
             })
             .collect::<Vec<_>>()
             .join("\n");
 
-        PostgresDatabase::insert_analysis(
-            self.hostname.to_string(),
-            "spike".to_string(),
-            model,
-            response_text.clone(),
-            errors.entries,
-        )?;
-
-        Ok(response_text)
+        if !response_text.is_empty() {
+            log::debug!("LLM Response: {:?}", response);
+            database::insert_analysis(
+                self.hostname.clone(),
+                "spike".to_string(),
+                model,
+                response_text.clone(),
+                errors.entries,
+            )?;
+            Ok(response_text)
+        } else {
+            log::error!("Error: Analysis response was empty");
+            Err(APIErrorType::LLM.of_string("Analysis response was empty".to_string()))
+        }
     }
 }
 
 impl AnalyzerImpl {
-    const SYSTEM_PROMPT: &str = r#"You are an SRE assistant.
-        Answer concisely for on-call engineers, in plain English, and always include a short checklist of concrete actions."#;
+    const LLM_ENTRIES_LIMIT_DEFAULT: u16 = 500;
+    const SYSTEM_PROMPT: &str = r#"You are an expert Senior Site Reliability Engineer (SRE).
+        Your task is to analyze systemd journal entries to identify the root cause of service failures or error spikes.
+        Provide a professional, technical, and concise analysis for on-call engineers.
+        Focus on identifying patterns, specific error codes, and sequence of events.
+        Always conclude with a 'Next Steps' checklist of concrete, actionable troubleshooting steps."#;
     fn compose_user_prompt(
         &self,
         start: f64,
@@ -98,14 +116,17 @@ impl AnalyzerImpl {
         errors: String,
     ) -> String {
         format!(
-            r#"Here is a set of systemd journal entries from host "{host}" for service "{service}"
-            between timestamps {start} and {end}, grouped around an error spike of {errors_count} errors.
+            r#"Analysis Request for host: "{host}", service: "{service}"
+            Time Range: {start} to {end} (Unix timestamps)
+            Incident Profile: Detected a spike of {errors_count} errors in this window.
 
-            1. "Summary" section: Explain in plain English what is likely happening, what changed, and which components are involved.
-            2. "Causes" section: Suggest the most probable root cause or a small set of hypotheses.
-            3. "Checklist" section: Output a short runbook-style checklist of concrete checks and actions.
+            Please analyze the following journal entries and provide:
+            1. **Summary**: A high-level overview of the incident (what happened and impact).
+            2. **Technical Deep-Dive**: Identify specific error patterns, failed assertions, or timeout signals. Mention specific PIDs or file paths if relevant.
+            3. **Probable Root Cause**: Your best hypothesis for why this happened (e.g., resource exhaustion, configuration error, upstream dependency failure).
+            4. **Checklist of Actions**: 3-5 concrete commands or checks for the on-call engineer to run immediately.
 
-            Errors:
+            Journal Entries (JSON format):
             {errors}"#,
             host = self.hostname,
             service = self.service,

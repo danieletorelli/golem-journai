@@ -1,7 +1,4 @@
-use crate::database::{
-    extract_float, extract_int_unsigned, extract_optional_text, extract_short_unsigned,
-    extract_text,
-};
+use crate::database::extract;
 use golem_rust::bindings::golem::rdbms::postgres;
 use golem_rust::golem_ai::golem::llm::llm;
 use golem_rust::Schema;
@@ -86,36 +83,36 @@ impl Eq for JournalEntry {}
 
 impl From<&postgres::DbRow> for JournalEntry {
     fn from(row: &postgres::DbRow) -> Self {
-        let values = &row.values;
+        let v = &row.values;
         JournalEntry {
-            boot_id: extract_text(&values[0]),
-            hostname: extract_text(&values[1]),
-            machine_id: extract_text(&values[2]),
-            priority: extract_text(&values[3]),
-            message: extract_text(&values[4]),
-            date: extract_float(&values[5]),
-            runtime_scope: extract_text(&values[6]),
-            pid: extract_optional_text(&values[7]),
-            uid: extract_optional_text(&values[8]),
-            gid: extract_optional_text(&values[9]),
-            transport: extract_optional_text(&values[10]),
-            syslog_facility: extract_optional_text(&values[11]),
-            syslog_identifier: extract_optional_text(&values[12]),
-            comm: extract_optional_text(&values[13]),
-            exe: extract_optional_text(&values[14]),
-            cmdline: extract_optional_text(&values[15]),
-            unit: extract_optional_text(&values[16]),
-            systemd_unit: extract_optional_text(&values[17]),
-            systemd_slice: extract_optional_text(&values[18]),
-            systemd_cgroup: extract_optional_text(&values[19]),
-            code_line: extract_optional_text(&values[20]),
-            code_file: extract_optional_text(&values[21]),
-            job_id: extract_optional_text(&values[22]),
-            job_result: extract_optional_text(&values[23]),
-            job_type: extract_optional_text(&values[24]),
-            invocation_id: extract_optional_text(&values[25]),
-            source_monotonic_timestamp: extract_optional_text(&values[26]),
-            source_boottime_timestamp: extract_optional_text(&values[27]),
+            boot_id: extract(&v[0]),
+            hostname: extract(&v[1]),
+            machine_id: extract(&v[2]),
+            priority: extract(&v[3]),
+            message: extract(&v[4]),
+            date: extract(&v[5]),
+            runtime_scope: extract(&v[6]),
+            pid: extract(&v[7]),
+            uid: extract(&v[8]),
+            gid: extract(&v[9]),
+            transport: extract(&v[10]),
+            syslog_facility: extract(&v[11]),
+            syslog_identifier: extract(&v[12]),
+            comm: extract(&v[13]),
+            exe: extract(&v[14]),
+            cmdline: extract(&v[15]),
+            unit: extract(&v[16]),
+            systemd_unit: extract(&v[17]),
+            systemd_slice: extract(&v[18]),
+            systemd_cgroup: extract(&v[19]),
+            code_line: extract(&v[20]),
+            code_file: extract(&v[21]),
+            job_id: extract(&v[22]),
+            job_result: extract(&v[23]),
+            job_type: extract(&v[24]),
+            invocation_id: extract(&v[25]),
+            source_monotonic_timestamp: extract(&v[26]),
+            source_boottime_timestamp: extract(&v[27]),
         }
     }
 }
@@ -187,26 +184,15 @@ pub struct ServiceErrorsBuilder<'a> {
 
 impl From<ServiceErrorsBuilder<'_>> for ServiceErrors {
     fn from(builder: ServiceErrorsBuilder<'_>) -> Self {
-        let values = &builder.row.values;
+        let v = &builder.row.values;
         ServiceErrors {
             hostname: builder.hostname,
-            service_name: extract_text(&values[0]),
-            error_count: match &values[1] {
-                postgres::DbValue::Int8(i) => *i as u64,
-                postgres::DbValue::Int4(i) => *i as u64,
-                _ => 0,
-            },
-            min_priority: extract_short_unsigned(&values[2]),
-            started_at: extract_float(&values[3]),
-            last_at: extract_float(&values[4]),
-            entries: match &values[5] {
-                postgres::DbValue::Array(arr) => arr
-                    .iter()
-                    .map(|item| item.get())
-                    .map(|value| extract_int_unsigned(&value))
-                    .collect(),
-                _ => Vec::new(),
-            },
+            service_name: extract(&v[0]),
+            error_count: extract(&v[1]),
+            min_priority: extract(&v[2]),
+            started_at: extract(&v[3]),
+            last_at: extract(&v[4]),
+            entries: extract(&v[5]),
         }
     }
 }

@@ -1,9 +1,7 @@
 mod database;
 
-use common_lib::database::PostgresDatabase;
 use common_lib::model::*;
 use common_lib::*;
-use database::Database;
 use golem_rust::agent_implementation;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -18,27 +16,21 @@ impl Collector for CollectorImpl {
     }
 
     fn collect(&self, entries: Vec<JournalEntry>) -> Result<u64, APIError> {
-        let mut accepted_count: u64 = 0;
-        let mut rejected_count: u64 = 0;
-        let mut accepted_entries: Vec<JournalEntry> = Vec::new();
+        let (accepted_entries, rejected): (Vec<_>, Vec<_>) = entries
+            .into_iter()
+            .partition(|entry| self.matches_filters(entry));
 
-        for entry in entries {
-            if self.matches_filters(&entry) {
-                accepted_entries.push(entry);
-                accepted_count += 1;
-            } else {
-                rejected_count += 1;
-            }
-        }
+        let accepted_count = accepted_entries.len() as u64;
+        let rejected_count = rejected.len() as u64;
 
-        PostgresDatabase::insert_entries(accepted_entries).map(|inserted_count| {
+        database::insert_entries(accepted_entries).map(|inserted_count| {
             log::info!("Collected {} entries", accepted_count);
             if rejected_count > 0 {
                 log::warn!("Rejected {} entries", rejected_count);
             }
             if inserted_count != accepted_count {
                 log::warn!(
-                    "Inserted {} entries (accepted: {}",
+                    "Inserted {} entries (accepted: {})",
                     inserted_count,
                     accepted_count
                 );
@@ -55,48 +47,49 @@ impl Collector for CollectorImpl {
         message_contains: Option<String>,
     ) -> Result<(Vec<JournalEntry>, u64), APIError> {
         self.log_query_params(since, priority, &message_contains);
-        PostgresDatabase::get_entries(self.hostname.to_string(), since, priority, message_contains)
-            .map(|entries| {
+        database::get_entries(self.hostname.clone(), since, priority, message_contains).map(
+            |entries| {
                 let count = entries.len() as u64;
                 (entries, count)
-            })
+            },
+        )
     }
 
     fn get_error_spikes(&self) -> Result<Vec<ServiceErrorsNoEntries>, APIError> {
-        const ANALYSIS_WINDOW_DAYS: u8 = 14; // Used if no previous analysis has been performed
-        let last_analysis_timestamp =
-            PostgresDatabase::get_last_analysis_timestamp(self.hostname.to_string())?;
+        let hostname = self.hostname.clone();
+        let since = database::get_last_analysis_timestamp(hostname.clone())?
+            .unwrap_or_else(|| self.get_default_since_timestamp());
 
-        let since = last_analysis_timestamp.unwrap_or_else(|| {
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs_f64();
-            now - (ANALYSIS_WINDOW_DAYS as u64 * 86400) as f64
-        });
+        database::get_error_spikes(hostname, since).map(|spikes| {
+            spikes
+                .into_iter()
+                .map(|spike| {
+                    log::debug!("Processing error spike for service: {}", spike.service_name);
 
-        let error_spikes = PostgresDatabase::get_error_spikes(self.hostname.to_string(), since)?;
+                    AnalyzerClient::get(spike.hostname.clone(), spike.service_name.clone())
+                        .trigger_analyze_spike(spike.clone());
 
-        // // TODO: Remove after testing
-        // let last = error_spikes.last().unwrap().to_owned();
-        // let sp = vec![last];
-        // // TODO: Remove after testing
-
-        let results: Vec<ServiceErrorsNoEntries> = error_spikes
-            .into_iter()
-            .map(|spike| {
-                log::debug!("Processing error spike: {:?}", spike);
-                AnalyzerClient::get(spike.hostname.to_string(), spike.service_name.to_string())
-                    .trigger_analyze_spike(spike.clone());
-                spike.into()
-            })
-            .collect();
-
-        Ok(results)
+                    ServiceErrorsNoEntries::from(spike)
+                })
+                .collect()
+        })
     }
 }
 
 impl CollectorImpl {
+    const ANALYSIS_WINDOW_DAYS: u8 = 14;
+    const SECONDS_PER_DAY: u64 = 86400;
+
+    fn get_default_since_timestamp(&self) -> f64 {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64();
+
+        let window_seconds = (Self::ANALYSIS_WINDOW_DAYS as u64 * Self::SECONDS_PER_DAY) as f64;
+        now - window_seconds
+    }
+
     fn log_query_params(
         &self,
         since: Option<f64>,
@@ -115,6 +108,6 @@ impl CollectorImpl {
     fn matches_filters(&self, entry: &JournalEntry) -> bool {
         entry.hostname == self.hostname
             && entry.priority.parse::<u8>().is_ok_and(|p| p <= 7)
-            && !entry.message.is_empty()
+            && !entry.message.trim().is_empty()
     }
 }
