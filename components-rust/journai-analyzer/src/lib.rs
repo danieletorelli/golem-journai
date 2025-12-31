@@ -176,7 +176,7 @@ impl AnalyzerImpl {
             "properties": {
                 "severity": {
                     "type": "string",
-                    "description": "The severity of the error spike. It's critical only if the system can't start without fixing the issue. It's high only if it needs to be addressed quickly or it will create problems in the immediate future. It's low if it can be ignored or handled later, especially if the errors are happening from a while. Otherwise, it's medium.",
+                    "description": "The severity of the error spike. It's critical only if the system can't start without fixing the issue or if it's caused by a probable hardware issue. It's high only if it needs to be addressed quickly or it will create problems in the immediate future. It's low if it can be ignored or handled later, especially if the errors are happening from a while. Otherwise, it's medium.",
                     "enum": ["Low", "Medium", "High", "Critical"]
                 },
                 "needs_user_action": {
