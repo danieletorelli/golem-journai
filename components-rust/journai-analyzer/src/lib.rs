@@ -95,12 +95,25 @@ impl AnalyzerImpl {
         let entries_limit: u16 = env::var("JOURNAI_LLM_ENTRIES_LIMIT")
             .ok()
             .and_then(|limit| limit.parse().ok())
-            .unwrap_or(Self::LLM_ENTRIES_LIMIT_DEFAULT);
+            .unwrap_or_else(|| {
+                log::warn!(
+                    "Invalid or missing JOURNAI_LLM_ENTRIES_LIMIT, using default: {}",
+                    Self::LLM_ENTRIES_LIMIT_DEFAULT
+                );
+                Self::LLM_ENTRIES_LIMIT_DEFAULT
+            });
 
         let entries = database::get_entries_by_ids(errors.entries.clone(), entries_limit)?;
         let entries_json = entries
             .iter()
-            .filter_map(|entry| serde_json::to_string(entry).ok())
+            .filter_map(|entry| {
+                serde_json::to_string(entry)
+                    .map_err(|e| {
+                        log::warn!("Failed to serialize entry: {}", e);
+                        e
+                    })
+                    .ok()
+            })
             .collect::<Vec<_>>()
             .join("\n\n");
 
@@ -144,7 +157,7 @@ impl AnalyzerImpl {
                 r
             })
             .map_err(|e| {
-                log::error!("Error: {:?}", e);
+                log::error!("LLM Request Failed: {:?}", e);
                 APIErrorType::LLM.of_llm(e)
             })?;
 
@@ -157,6 +170,12 @@ impl AnalyzerImpl {
             })
             .collect::<Vec<_>>()
             .join("\n");
+
+        if response_text.is_empty() {
+            return Err(APIError::LLMError(
+                "LLM returned empty response".to_string(),
+            ));
+        }
 
         Ok((events, response_text))
     }
@@ -227,30 +246,39 @@ impl AnalyzerImpl {
                 r
             })
             .map_err(|e| {
-                log::error!("Error: {:?}", e);
+                log::error!("LLM structured call failed: {:?}", e);
                 APIErrorType::LLM.of_llm(e)
             })?;
 
-        let assertion = serde_json::from_str(
-            &response
-                .content
-                .iter()
-                .filter_map(|content_part| match content_part {
-                    llm::ContentPart::Text(txt) if !txt.trim().is_empty() => Some(txt.trim()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join("")
-                .replace("```json", "")
-                .replace("```", "")
-                .trim()
-                .chars()
-                .filter(|c| !c.is_whitespace())
-                .collect::<String>(),
-        )
-        .map_err(|e| {
-            log::error!("Error parsing LLM response: {:?}\nError: {:?}", response, e);
-            APIError::Other(format!("Error parsing LLM response: {:?}", e))
+        let response_text = response
+            .content
+            .iter()
+            .filter_map(|content_part| match content_part {
+                llm::ContentPart::Text(txt) if !txt.trim().is_empty() => Some(txt.trim()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("")
+            .replace("```json", "")
+            .replace("```", "")
+            .trim()
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>();
+
+        if response_text.is_empty() {
+            return Err(APIError::LLMError(
+                "LLM returned empty structured response".to_string(),
+            ));
+        }
+
+        let assertion = serde_json::from_str(&response_text).map_err(|e| {
+            log::error!(
+                "Failed to parse LLM response as JSON: {}\nResponse: {}",
+                e,
+                response_text
+            );
+            APIError::Other(format!("Error parsing LLM response: {}", e))
         })?;
 
         Ok(assertion)

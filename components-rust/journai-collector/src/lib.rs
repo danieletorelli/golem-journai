@@ -87,7 +87,7 @@ impl CollectorImpl {
     fn get_default_since_timestamp(&self) -> f64 {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_else(|_| std::time::Duration::from_secs(0))
             .as_secs_f64();
 
         let window_seconds = (Self::ANALYSIS_WINDOW_DAYS as u64 * Self::SECONDS_PER_DAY) as f64;

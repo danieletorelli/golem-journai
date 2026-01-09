@@ -20,7 +20,11 @@ impl PostgresDatabase {
         let user = env::var("DATABASE_USER").unwrap_or_else(|_| "journai".to_string());
         let password = env::var("DATABASE_PASSWORD").ok();
         let host = env::var("DATABASE_HOST").unwrap_or_else(|_| "localhost".to_string());
-        let port = env::var("DATABASE_PORT").unwrap_or_else(|_| "5432".to_string());
+        let port = env::var("DATABASE_PORT")
+            .unwrap_or_else(|_| "5432".to_string())
+            .parse::<u16>()
+            .map_err(|_| Error::ConnectionFailure("Invalid DATABASE_PORT value".to_string()))?
+            .to_string();
         let db = env::var("DATABASE_DB").unwrap_or_else(|_| "journai".to_string());
 
         let url = match &password {
