@@ -9,22 +9,29 @@ use std::env;
 struct AnalyzerImpl {
     hostname: String,
     service: String,
+    events: Vec<llm::Event>,
 }
 
 #[agent_implementation]
 impl Analyzer for AnalyzerImpl {
     fn new(hostname: String, service: String) -> Self {
-        Self { hostname, service }
+        Self {
+            hostname,
+            service,
+            events: vec![],
+        }
     }
 
-    async fn analyze_spike(&self, errors: ServiceErrors) -> Result<String, APIError> {
+    async fn analyze_spike(&mut self, errors: ServiceErrors) -> Result<String, APIError> {
         let model = env::var("JOURNAI_LLM_MODEL").map_err(|_| {
             APIErrorType::LLM.of_string("JOURNAI_LLM_MODEL env variable is not defined".to_string())
         })?;
 
-        let (mut events, spike_event_summary) =
-            self.execute_spike_summary_llm_call(&model, &errors)?;
-        let spike_event_assertion = self.execute_spike_structured_llm_call(&model, &mut events)?;
+        let (events, spike_event_summary) = self.execute_spike_summary_llm_call(&model, &errors)?;
+        let (events, spike_event_assertion) =
+            self.execute_spike_structured_llm_call(&model, &events)?;
+
+        self.events = events;
 
         if !spike_event_summary.trim().is_empty() {
             database::insert_analysis(
@@ -183,8 +190,8 @@ impl AnalyzerImpl {
     fn execute_spike_structured_llm_call(
         &self,
         model: &str,
-        events: &mut Vec<llm::Event>,
-    ) -> Result<SpikeEventAssertion, APIError> {
+        events: &[llm::Event],
+    ) -> Result<(Vec<llm::Event>, SpikeEventAssertion), APIError> {
         let response_format = serde_json::json!({
             "type": "json_schema",
             "json_schema": {
@@ -200,7 +207,7 @@ impl AnalyzerImpl {
                 },
                 "needs_user_action": {
                     "type": "boolean",
-                    "description": "Indicates if the error spike requires immediate user intervention."
+                    "description": "It's true if the error spike requires immediate user intervention and a notification should be sent; false otherwise."
                 }
             },
             "required": ["severity", "needs_user_action"],
@@ -220,27 +227,35 @@ impl AnalyzerImpl {
         };
 
         log::debug!("Sending request to LLM ({:?})", config);
-        events.retain(|event| matches!(event, llm::Event::Response(_)));
-        events.extend(vec![
-            llm::Event::Message(llm::Message {
-                role: llm::Role::System,
-                name: None,
-                content: vec![llm::ContentPart::Text(format!(
-                    "{}\n{}",
-                    Self::SPIKE_STRUCTURED_SYSTEM_PROMPT,
-                    response_format
-                ))],
-            }),
-            llm::Event::Message(llm::Message {
-                role: llm::Role::User,
-                name: Some("JournAI".to_string()),
-                content: vec![llm::ContentPart::Text(
-                    Self::SPIKE_STRUCTURED_USER_PROMPT.to_string(),
-                )],
-            }),
-        ]);
 
-        let response = llm::send(events, &config)
+        let request_events: Vec<llm::Event> = events
+            .iter()
+            .filter(|event| {
+                matches!(event, llm::Event::Message(m) if m.role == llm::Role::System)
+                    || matches!(event, llm::Event::Response(_))
+            })
+            .cloned()
+            .chain(vec![
+                llm::Event::Message(llm::Message {
+                    role: llm::Role::System,
+                    name: None,
+                    content: vec![llm::ContentPart::Text(format!(
+                        "{}\n{}",
+                        Self::SPIKE_STRUCTURED_SYSTEM_PROMPT,
+                        response_format
+                    ))],
+                }),
+                llm::Event::Message(llm::Message {
+                    role: llm::Role::User,
+                    name: Some("JournAI".to_string()),
+                    content: vec![llm::ContentPart::Text(
+                        Self::SPIKE_STRUCTURED_USER_PROMPT.to_string(),
+                    )],
+                }),
+            ])
+            .collect();
+
+        let response = llm::send(&request_events, &config)
             .map(|r| {
                 log::debug!("LLM Response: {:?}", r);
                 r
@@ -258,29 +273,59 @@ impl AnalyzerImpl {
                 _ => None,
             })
             .collect::<Vec<_>>()
-            .join("")
-            .replace("```json", "")
-            .replace("```", "")
-            .trim()
-            .chars()
-            .filter(|c| !c.is_whitespace())
-            .collect::<String>();
+            .join("");
 
-        if response_text.is_empty() {
-            return Err(APIError::LLMError(
-                "LLM returned empty structured response".to_string(),
-            ));
-        }
+        let json_value: serde_json::Value = serde_json::from_str(&response_text)
+            .or_else(|_| {
+                serde_json::from_str(
+                    response_text
+                        .replace("```json", "")
+                        .replace("```", "")
+                        .trim(),
+                )
+            })
+            .map_err(|e| {
+                log::error!(
+                    "Failed to parse LLM response as JSON: {}\nResponse: {}",
+                    e,
+                    response_text
+                );
+                APIError::Other(format!("Error parsing LLM response: {}", e))
+            })?;
 
-        let assertion = serde_json::from_str(&response_text).map_err(|e| {
+        let assertion: SpikeEventAssertion = serde_json::from_value(json_value).map_err(|e| {
             log::error!(
-                "Failed to parse LLM response as JSON: {}\nResponse: {}",
+                "LLM response failed schema validation: {}\nResponse: {}",
                 e,
                 response_text
             );
-            APIError::Other(format!("Error parsing LLM response: {}", e))
+            APIError::Other(format!("Invalid schema in LLM response: {}", e))
         })?;
 
-        Ok(assertion)
+        let final_events = events
+            .iter()
+            .cloned()
+            .chain(vec![
+                llm::Event::Message(llm::Message {
+                    role: llm::Role::System,
+                    name: None,
+                    content: vec![llm::ContentPart::Text(format!(
+                        "{}\n{}",
+                        Self::SPIKE_STRUCTURED_SYSTEM_PROMPT,
+                        response_format
+                    ))],
+                }),
+                llm::Event::Message(llm::Message {
+                    role: llm::Role::User,
+                    name: Some("JournAI".to_string()),
+                    content: vec![llm::ContentPart::Text(
+                        Self::SPIKE_STRUCTURED_USER_PROMPT.to_string(),
+                    )],
+                }),
+                llm::Event::Response(response),
+            ])
+            .collect();
+
+        Ok((final_events, assertion))
     }
 }

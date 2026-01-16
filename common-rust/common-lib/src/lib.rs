@@ -24,5 +24,5 @@ pub trait Collector {
 pub trait Analyzer {
     fn new(hostname: String, service: String) -> Self;
 
-    async fn analyze_spike(&self, errors: ServiceErrors) -> Result<String, APIError>;
+    async fn analyze_spike(&mut self, errors: ServiceErrors) -> Result<String, APIError>;
 }
