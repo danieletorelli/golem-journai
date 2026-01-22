@@ -20,9 +20,14 @@ pub trait Collector {
     fn get_error_spikes(&self) -> Result<Vec<ServiceErrorsNoEntries>, APIError>;
 }
 
-#[agent_definition(ephemeral)]
+#[agent_definition]
 pub trait Analyzer {
     fn new(hostname: String, service: String) -> Self;
 
     async fn analyze_spike(&mut self, errors: ServiceErrors) -> Result<String, APIError>;
+}
+
+#[agent_definition(ephemeral)]
+pub trait Visualizer {
+    fn new(hostname: String) -> Self;
 }

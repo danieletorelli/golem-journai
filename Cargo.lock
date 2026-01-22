@@ -584,6 +584,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "journai_visualizer"
+version = "0.0.1"
+dependencies = [
+ "common-lib",
+ "golem-rust",
+ "log",
+ "serde",
+ "serde_json",
+ "wstd",
+]
+
+[[package]]
 name = "js-sys"
 version = "0.3.83"
 source = "registry+https://github.com/rust-lang/crates.io-index"
