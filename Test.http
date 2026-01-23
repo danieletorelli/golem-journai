@@ -74,9 +74,13 @@ GET http://journai.localhost:9006/entries/loki?since=-1&priority=-1&contains=
 
 
 
+
+
 ### Fetch (since)
 
 GET http://journai.localhost:9006/entries/loki?since=1743859412&priority=-1&contains=
+
+
 
 
 
@@ -86,9 +90,13 @@ GET http://journai.localhost:9006/entries/loki?since=-1&priority=3&contains=
 
 
 
+
+
 ### Fetch (since & priority)
 
 GET http://journai.localhost:9006/entries/loki?since=1743859412&priority=3&contains=
+
+
 
 
 
@@ -108,4 +116,18 @@ GET http://journai.localhost:9006/entries/loki?since=1743859412&priority=3&conta
 
 GET http://journai.localhost:9006/errors/loki
 
-###
+### Dashboard
+
+GET http://journai.localhost:9006/dashboard/overview
+
+### Dashboard alerts
+
+GET http://journai.localhost:9006/dashboard/alerts
+
+### Analysis queue
+
+GET http://journai.localhost:9006/analysis/queue
+
+### Analysis history loki
+
+GET http://journai.localhost:9006/analysis/history/loki

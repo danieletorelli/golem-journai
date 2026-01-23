@@ -1,3 +1,4 @@
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use golem_rust::bindings::golem::rdbms::postgres::{DbConnection, DbValue, Error};
 use std::env;
 
@@ -144,6 +145,50 @@ impl FromDbValue for String {
     fn from_db_value(value: &DbValue) -> Self {
         match value {
             DbValue::Text(s) => s.clone(),
+            DbValue::Timestamp(t) => {
+                let ndt = NaiveDateTime::new(
+                    NaiveDate::from_ymd_opt(t.date.year, t.date.month as u32, t.date.day as u32)
+                        .unwrap_or_default(),
+                    NaiveTime::from_hms_nano_opt(
+                        t.time.hour as u32,
+                        t.time.minute as u32,
+                        t.time.second as u32,
+                        t.time.nanosecond,
+                    )
+                    .unwrap_or_default(),
+                );
+                ndt.format("%Y-%m-%d %H:%M:%S").to_string()
+            }
+            DbValue::Timestamptz(t) => {
+                let ndt = NaiveDateTime::new(
+                    NaiveDate::from_ymd_opt(
+                        t.timestamp.date.year,
+                        t.timestamp.date.month as u32,
+                        t.timestamp.date.day as u32,
+                    )
+                    .unwrap_or_default(),
+                    NaiveTime::from_hms_nano_opt(
+                        t.timestamp.time.hour as u32,
+                        t.timestamp.time.minute as u32,
+                        t.timestamp.time.second as u32,
+                        t.timestamp.time.nanosecond,
+                    )
+                    .unwrap_or_default(),
+                );
+                let dt: DateTime<Utc> = DateTime::from_naive_utc_and_offset(ndt, Utc);
+                dt.format("%Y-%m-%d %H:%M:%S %Z").to_string()
+            }
+            DbValue::Date(d) => NaiveDate::from_ymd_opt(d.year, d.month as u32, d.day as u32)
+                .unwrap_or_default()
+                .to_string(),
+            DbValue::Time(t) => NaiveTime::from_hms_nano_opt(
+                t.hour as u32,
+                t.minute as u32,
+                t.second as u32,
+                t.nanosecond,
+            )
+            .unwrap_or_default()
+            .to_string(),
             _ => String::new(),
         }
     }
@@ -165,6 +210,54 @@ impl FromDbValue for f64 {
         match value {
             DbValue::Float8(f) => *f,
             DbValue::Float4(f) => *f as f64,
+            DbValue::Timestamp(t) => {
+                let ndt = NaiveDateTime::new(
+                    NaiveDate::from_ymd_opt(t.date.year, t.date.month as u32, t.date.day as u32)
+                        .unwrap_or_default(),
+                    NaiveTime::from_hms_nano_opt(
+                        t.time.hour as u32,
+                        t.time.minute as u32,
+                        t.time.second as u32,
+                        t.time.nanosecond,
+                    )
+                    .unwrap_or_default(),
+                );
+                ndt.and_utc().timestamp() as f64
+                    + (ndt.and_utc().timestamp_subsec_nanos() as f64 / 1e9)
+            }
+            DbValue::Timestamptz(t) => {
+                let ndt = NaiveDateTime::new(
+                    NaiveDate::from_ymd_opt(
+                        t.timestamp.date.year,
+                        t.timestamp.date.month as u32,
+                        t.timestamp.date.day as u32,
+                    )
+                    .unwrap_or_default(),
+                    NaiveTime::from_hms_nano_opt(
+                        t.timestamp.time.hour as u32,
+                        t.timestamp.time.minute as u32,
+                        t.timestamp.time.second as u32,
+                        t.timestamp.time.nanosecond,
+                    )
+                    .unwrap_or_default(),
+                );
+                let dt: DateTime<Utc> = DateTime::from_naive_utc_and_offset(ndt, Utc);
+                dt.timestamp() as f64 + (dt.timestamp_subsec_nanos() as f64 / 1e9)
+            }
+            DbValue::Date(d) => {
+                let ndt = NaiveDateTime::new(
+                    NaiveDate::from_ymd_opt(d.year, d.month as u32, d.day as u32)
+                        .unwrap_or_default(),
+                    NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
+                );
+                ndt.and_utc().timestamp() as f64
+            }
+            DbValue::Time(t) => {
+                (t.hour as f64 * 3600.0)
+                    + (t.minute as f64 * 60.0)
+                    + (t.second as f64)
+                    + (t.nanosecond as f64 / 1e9)
+            }
             _ => 0.0,
         }
     }

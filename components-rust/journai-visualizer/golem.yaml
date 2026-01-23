@@ -11,26 +11,69 @@ httpApi:
     journai-visualizer-api:
       version: '0.0.1'
       routes:
-        - method: POST
-          path: /journai-visualizer-api/{name}/increment
+        - method: GET
+          path: /dashboard/overview
           binding:
             type: default
             componentName: journai:visualizer
             response: |
-              let name: string = request.path.name;
-              let agent = counter-agent(name);
-              let new-value = agent.increment();
-              { status: 200, body: { result: "incremented ${name}, new value is ${new-value}" } }
+              let visualizer = visualizer();
+              let result = visualizer.dashboard-overview();
+              match result {
+                ok(html) => { status: 200, headers: { content-type: "text/html" }, body: html },
+                err(fetch-error(e)) => { status: 500, headers: { content-type: "text/html" }, body: "<html><h1>Dashboard error</h1><br><h2>${e}</h2></html>" },
+                err(_) => { status: 500, headers: { content-type: "text/html" }, body: "<html><h1>Unexpected error</h1></html>" },
+              }
+        - method: GET
+          path: /dashboard/alerts
+          binding:
+            type: default
+            componentName: journai:visualizer
+            response: |
+              let visualizer = visualizer();
+              let result = visualizer.dashboard-alerts();
+              match result {
+                ok(html) => { status: 200, headers: { content-type: "text/html" }, body: html },
+                err(fetch-error(e)) => { status: 500, headers: { content-type: "text/html" }, body: "<html><h1>Dashboard error</h1><br><h2>${e}</h2></html>" },
+                err(_) => { status: 500, headers: { content-type: "text/html" }, body: "<html><h1>Unexpected error</h1></html>" },
+              }
+        - method: GET
+          path: /analysis/queue
+          binding:
+            type: default
+            componentName: journai:visualizer
+            response: |
+              let visualizer = visualizer();
+              let result = visualizer.analysis-queue();
+              match result {
+                ok(html) => { status: 200, headers: { content-type: "text/html" }, body: html },
+                err(fetch-error(e)) => { status: 500, headers: { content-type: "text/html" }, body: "<html><h1>Dashboard error</h1><br><h2>${e}</h2></html>" },
+                err(_) => { status: 500, headers: { content-type: "text/html" }, body: "<html><h1>Unexpected error</h1></html>" },
+              }
+        - method: GET
+          path: /analysis/history/{hostname}
+          binding:
+            type: default
+            componentName: journai:visualizer
+            response: |
+              let hostname: string = request.path.hostname;
+              let visualizer = visualizer();
+              let result = visualizer.analysis-history(hostname);
+              match result {
+                ok(html) => { status: 200, headers: { content-type: "text/html" }, body: html },
+                err(fetch-error(e)) => { status: 500, headers: { content-type: "text/html" }, body: "<html><h1>Dashboard error</h1><br><h2>${e}</h2></html>" },
+                err(_) => { status: 500, headers: { content-type: "text/html" }, body: "<html><h1>Unexpected error</h1></html>" },
+              }
 
   deployments:
     local:
-      - domain: golem-journai.localhost:9006
+      - domain: journai.localhost:9006
         definitions:
           - journai-visualizer-api
 
 components:
   journai:visualizer:
-    templates: rust
+    templates: rust, common-env
 
     # Component environment variables can reference system environment variables with minijinja syntax:
     #
