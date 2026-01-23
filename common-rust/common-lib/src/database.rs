@@ -205,6 +205,28 @@ impl FromDbValue for i16 {
     }
 }
 
+impl FromDbValue for i32 {
+    fn from_db_value(value: &DbValue) -> Self {
+        match value {
+            DbValue::Int2(i) => *i as i32,
+            DbValue::Int4(i) => *i,
+            DbValue::Int8(i) => *i as i32,
+            _ => 0,
+        }
+    }
+}
+
+impl FromDbValue for i64 {
+    fn from_db_value(value: &DbValue) -> Self {
+        match value {
+            DbValue::Int2(i) => *i as i64,
+            DbValue::Int4(i) => *i as i64,
+            DbValue::Int8(i) => *i,
+            _ => 0,
+        }
+    }
+}
+
 impl FromDbValue for f64 {
     fn from_db_value(value: &DbValue) -> Self {
         match value {

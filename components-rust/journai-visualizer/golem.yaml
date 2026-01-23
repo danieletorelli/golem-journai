@@ -64,6 +64,20 @@ httpApi:
                 err(fetch-error(e)) => { status: 500, headers: { content-type: "text/html" }, body: "<html><h1>Dashboard error</h1><br><h2>${e}</h2></html>" },
                 err(_) => { status: 500, headers: { content-type: "text/html" }, body: "<html><h1>Unexpected error</h1></html>" },
               }
+        - method: GET
+          path: /analysis/details/{analysis_id}
+          binding:
+            type: default
+            componentName: journai:visualizer
+            response: |
+              let analysis_id: string = request.path.analysis_id;
+              let visualizer = visualizer();
+              let result = visualizer.analysis-details(analysis_id);
+              match result {
+                ok(html) => { status: 200, headers: { content-type: "text/html" }, body: html },
+                err(fetch-error(e)) => { status: 500, headers: { content-type: "text/html" }, body: "<html><h1>Dashboard error</h1><br><h2>${e}</h2></html>" },
+                err(_) => { status: 500, headers: { content-type: "text/html" }, body: "<html><h1>Unexpected error</h1></html>" },
+              }
 
   deployments:
     local:

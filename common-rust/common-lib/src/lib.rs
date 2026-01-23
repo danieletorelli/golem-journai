@@ -35,4 +35,5 @@ pub trait Visualizer {
     fn dashboard_alerts(&self) -> Result<String, APIError>;
     fn analysis_queue(&self) -> Result<String, APIError>;
     fn analysis_history(&self, hostname: String) -> Result<String, APIError>;
+    fn analysis_details(&self, analysis_id: String) -> Result<String, APIError>;
 }

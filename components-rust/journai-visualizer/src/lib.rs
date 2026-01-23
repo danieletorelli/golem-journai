@@ -43,6 +43,18 @@ impl Visualizer for VisualizerImpl {
     fn dashboard_overview(&self) -> Result<String, APIError> {
         let overview = database::get_dashboard_overview()?;
 
+        let hostnames_html = if overview.hostnames.is_empty() {
+            "<p>No hosts found</p>".to_string()
+        } else {
+            let links = overview
+                .hostnames
+                .iter()
+                .map(|h| format!(r#"<li><a href="/analysis/history/{}">{}</a></li>"#, h, h))
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!("<ul>{}</ul>", links)
+        };
+
         let html = format!(
             r#"{}
 <h1>Dashboard Overview</h1>
@@ -70,17 +82,22 @@ impl Visualizer for VisualizerImpl {
     </div>
 </div>
 <div class="card">
+    <h2>Managed Hosts</h2>
+    {}
+</div>
+<div class="card">
     <p>Last updated: {}</p>
     <p><a href="/dashboard/alerts">View Active Alerts</a> | <a href="/analysis/queue">Analysis Queue</a></p>
 </div>
 {}
             "#,
             HTML_HEADER,
-            overview.active_hosts,
+            overview.active_hosts_count,
             overview.total_entries_today,
             overview.error_spikes_active,
             overview.critical_alerts,
             overview.collection_rate_per_hour,
+            hostnames_html,
             DateTime::<Utc>::from(SystemTime::now()).format("%Y-%m-%d %H:%M:%S"),
             HTML_FOOTER
         );
@@ -196,20 +213,49 @@ impl Visualizer for VisualizerImpl {
             let rows = history
                 .iter()
                 .map(|analysis| {
-                    println!("{:?}", analysis);
                     format!(
-                        "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                        r#"<tr>
+                            <td>{}</td>
+                            <td>{}</td>
+                            <td>{}</td>
+                            <td>{}</td>
+                            <td>{}</td>
+                            <td>{}</td>
+                            <td>{}</td>
+                            <td>{}</td>
+                            <td><a href="/analysis/details/{}">Details</a></td>
+                        </tr>"#,
                         analysis.analysed_at,
                         analysis.service_name,
                         analysis.analysis_type,
                         analysis.severity,
+                        analysis.entries_count,
+                        analysis.model,
+                        analysis.first_error,
+                        analysis.last_error,
+                        analysis.id
                     )
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
 
             format!(
-                "<table><thead><tr><th>Date</th><th>Service</th><th>Type</th><th>Severity</th></tr></thead><tbody>{}</tbody></table>",
+                r#"<table>
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Service</th>
+                            <th>Type</th>
+                            <th>Severity</th>
+                            <th>Entries</th>
+                            <th>Model</th>
+                            <th>First Error</th>
+                            <th>Last Error</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>{}</tbody>
+                </table>"#,
                 rows
             )
         };
@@ -218,7 +264,7 @@ impl Visualizer for VisualizerImpl {
             r#"{}
 <h1>Analysis History - {}</h1>
 <div class="card">
-    <h2>Recent Analyses</h2>
+    <h2>Host Analyses</h2>
     {}
 </div>
 <div class="card">
@@ -227,6 +273,68 @@ impl Visualizer for VisualizerImpl {
 {}
             "#,
             HTML_HEADER, hostname, history_html, HTML_FOOTER
+        );
+
+        Ok(html)
+    }
+
+    fn analysis_details(&self, analysis_id: String) -> Result<String, APIError> {
+        let id = analysis_id.parse::<i32>().map_err(|_| {
+            common_lib::model::APIErrorType::Fetch.of_string("Invalid analysis ID".to_string())
+        })?;
+
+        let details = database::get_analysis_details(id)?;
+
+        let html = format!(
+            r#"{}
+<h1>Analysis Details - #{}</h1>
+<div class="card">
+    <h2>Overview</h2>
+    <p><strong>Hostname:</strong> {}</p>
+    <p><strong>Service:</strong> {}</p>
+    <p><strong>Type:</strong> {}</p>
+    <p><strong>Analysed At:</strong> {}</p>
+    <p><strong>Severity:</strong> {}</p>
+    <p><strong>Model Used:</strong> {}</p>
+    <p><strong>Needs User Action:</strong> {}</p>
+</div>
+
+<div class="card">
+    <h2>Analysis Result</h2>
+    <p>{}</p>
+</div>
+
+<div class="card">
+    <h2>Data Context</h2>
+    <p><strong>Entries Count:</strong> {}</p>
+    <p><strong>First Error:</strong> {}</p>
+    <p><strong>Last Error:</strong> {}</p>
+</div>
+
+<div class="card">
+    <p><a href="/analysis/history/{}">Back to Host History</a> | <a href="/dashboard/overview">Back to Overview</a></p>
+</div>
+{}
+            "#,
+            HTML_HEADER,
+            details.id,
+            details.hostname,
+            details.service_name,
+            details.analysis_type,
+            details.analysed_at,
+            details.severity,
+            details.model,
+            if details.needs_user_action {
+                "Yes"
+            } else {
+                "No"
+            },
+            details.summary.replace("\n", "<br>"),
+            details.entries_count,
+            details.first_error,
+            details.last_error,
+            details.hostname,
+            HTML_FOOTER
         );
 
         Ok(html)
