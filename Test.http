@@ -74,13 +74,9 @@ GET http://journai.localhost:9006/entries/loki?since=-1&priority=-1&contains=
 
 
 
-
-
 ### Fetch (since)
 
 GET http://journai.localhost:9006/entries/loki?since=1743859412&priority=-1&contains=
-
-
 
 
 
@@ -90,13 +86,9 @@ GET http://journai.localhost:9006/entries/loki?since=-1&priority=3&contains=
 
 
 
-
-
 ### Fetch (since & priority)
 
 GET http://journai.localhost:9006/entries/loki?since=1743859412&priority=3&contains=
-
-
 
 
 
