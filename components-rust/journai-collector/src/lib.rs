@@ -115,3 +115,81 @@ impl CollectorImpl {
             && !entry.message.trim().is_empty()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_entry(hostname: &str, priority: &str, message: &str) -> JournalEntry {
+        JournalEntry {
+            boot_id: "boot".to_string(),
+            hostname: hostname.to_string(),
+            machine_id: "machine".to_string(),
+            priority: priority.to_string(),
+            message: message.to_string(),
+            date: 1.0,
+            runtime_scope: "system".to_string(),
+            pid: None,
+            uid: None,
+            gid: None,
+            transport: None,
+            syslog_facility: None,
+            syslog_identifier: None,
+            comm: None,
+            exe: None,
+            cmdline: None,
+            unit: None,
+            systemd_unit: None,
+            systemd_slice: None,
+            systemd_cgroup: None,
+            code_line: None,
+            code_file: None,
+            job_id: None,
+            job_result: None,
+            job_type: None,
+            invocation_id: None,
+            source_monotonic_timestamp: None,
+            source_boottime_timestamp: None,
+        }
+    }
+
+    #[test]
+    fn matches_filters_accepts_valid_entries() {
+        // Verify valid entries pass filters
+        let collector = CollectorImpl::new("host-a".to_string());
+        let entry = sample_entry("host-a", "3", "ok");
+
+        assert!(collector.matches_filters(&entry));
+    }
+
+    #[test]
+    fn matches_filters_rejects_invalid_entries() {
+        // Verify invalid host, priority, or message is rejected
+        let collector = CollectorImpl::new("host-a".to_string());
+
+        let wrong_host = sample_entry("host-b", "3", "ok");
+        assert!(!collector.matches_filters(&wrong_host));
+
+        let invalid_priority = sample_entry("host-a", "9", "ok");
+        assert!(!collector.matches_filters(&invalid_priority));
+
+        let empty_message = sample_entry("host-a", "3", "   ");
+        assert!(!collector.matches_filters(&empty_message));
+    }
+
+    #[test]
+    fn default_since_timestamp_respects_window() {
+        // Verify default since timestamp uses the expected window
+        let collector = CollectorImpl::new("host-a".to_string());
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64();
+        let since = collector.get_default_since_timestamp();
+        let window =
+            (CollectorImpl::ANALYSIS_WINDOW_DAYS as u64 * CollectorImpl::SECONDS_PER_DAY) as f64;
+
+        assert!(since <= now);
+        assert!(since >= now - window - 1.0);
+    }
+}

@@ -391,3 +391,132 @@ impl AnalyzerImpl {
         all_events
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn sample_entry(message: &str) -> JournalEntry {
+        JournalEntry {
+            boot_id: "boot".to_string(),
+            hostname: "host".to_string(),
+            machine_id: "machine".to_string(),
+            priority: "3".to_string(),
+            message: message.to_string(),
+            date: 1.0,
+            runtime_scope: "system".to_string(),
+            pid: None,
+            uid: None,
+            gid: None,
+            transport: None,
+            syslog_facility: None,
+            syslog_identifier: None,
+            comm: None,
+            exe: None,
+            cmdline: None,
+            unit: None,
+            systemd_unit: None,
+            systemd_slice: None,
+            systemd_cgroup: None,
+            code_line: None,
+            code_file: None,
+            job_id: None,
+            job_result: None,
+            job_type: None,
+            invocation_id: None,
+            source_monotonic_timestamp: None,
+            source_boottime_timestamp: None,
+        }
+    }
+
+    #[test]
+    fn compose_analysis_header_includes_context() {
+        // Verify analysis header includes key context fields
+        let analyzer = AnalyzerImpl::new("host-1".to_string(), "svc".to_string());
+        let header = analyzer.compose_analysis_request_header(10.0, 20.0, 3);
+
+        assert!(header.contains("host-1"));
+        assert!(header.contains("svc"));
+        assert!(header.contains("10"));
+        assert!(header.contains("20"));
+        assert!(header.contains("3"));
+    }
+
+    #[test]
+    fn spike_summary_lite_uses_unique_messages_and_truncates() {
+        // Verify lite prompt uses unique messages and truncates long ones
+        let analyzer = AnalyzerImpl::new("host-1".to_string(), "svc".to_string());
+        let long_message = "a".repeat(250);
+        let errors = ServiceErrors {
+            hostname: "host-1".to_string(),
+            service_name: "svc".to_string(),
+            error_count: 6,
+            min_priority: 3,
+            started_at: 10.0,
+            last_at: 20.0,
+            entries: vec![1, 2, 3],
+        };
+
+        let entries = vec![
+            sample_entry("repeat"),
+            sample_entry("repeat"),
+            sample_entry(&long_message),
+            sample_entry("first"),
+            sample_entry("second"),
+            sample_entry("third"),
+            sample_entry("fourth"),
+        ];
+
+        let output = analyzer.compose_spike_summary_user_prompt_lite(&errors, &entries);
+        assert!(output.contains("Error Sample"));
+        assert!(output.contains("repeat"));
+        assert!(output.contains("first"));
+        assert!(output.contains("second"));
+        assert!(output.contains("third"));
+        assert!(output.contains(&format!("{}...", "a".repeat(200))));
+
+        let sample_section = output
+            .split("Error Sample (first unique messages):\\n")
+            .nth(1)
+            .unwrap_or("");
+        let sample_lines: Vec<&str> = sample_section.lines().collect();
+        assert!(sample_lines.len() <= 5);
+    }
+
+    #[test]
+    fn compact_events_respects_context_limit() {
+        // Verify event compaction honors the configured window
+        let _guard = env_lock().lock().unwrap();
+        env::set_var("JOURNAI_LLM_CONTEXT_WINDOW_LIMIT", "2");
+
+        let analyzer = AnalyzerImpl::new("host-1".to_string(), "svc".to_string());
+        let events = vec![
+            llm::Event::Message(llm::Message {
+                role: llm::Role::User,
+                name: None,
+                content: vec![llm::ContentPart::Text("first".to_string())],
+            }),
+            llm::Event::Message(llm::Message {
+                role: llm::Role::User,
+                name: None,
+                content: vec![llm::ContentPart::Text("second".to_string())],
+            }),
+            llm::Event::Message(llm::Message {
+                role: llm::Role::User,
+                name: None,
+                content: vec![llm::ContentPart::Text("third".to_string())],
+            }),
+        ];
+
+        let compacted = analyzer.compact_events(events);
+        assert_eq!(compacted.len(), 2);
+
+        env::remove_var("JOURNAI_LLM_CONTEXT_WINDOW_LIMIT");
+    }
+}

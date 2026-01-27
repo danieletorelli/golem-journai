@@ -370,3 +370,31 @@ impl VisualizerImpl {
         escaped
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn escape_html_rewrites_special_chars() {
+        // Verify HTML escaping for special characters
+        let visualizer = VisualizerImpl::new();
+        let escaped = visualizer.escape_html("<test> \"a&b\" 'c'");
+
+        assert_eq!(escaped, "&lt;test&gt; &quot;a&amp;b&quot; &#39;c&#39;");
+    }
+
+    #[test]
+    fn analysis_details_rejects_invalid_id() {
+        // Verify invalid analysis IDs are rejected
+        let visualizer = VisualizerImpl::new();
+        let result = visualizer.analysis_details("nope".to_string());
+
+        match result {
+            Err(APIError::FetchError(message)) => {
+                assert!(message.contains("Invalid analysis ID"));
+            }
+            _ => panic!("expected fetch error"),
+        }
+    }
+}
