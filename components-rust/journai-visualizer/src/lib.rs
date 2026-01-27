@@ -49,7 +49,13 @@ impl Visualizer for VisualizerImpl {
             let links = overview
                 .hostnames
                 .iter()
-                .map(|h| format!(r#"<li><a href="/analysis/history/{}">{}</a></li>"#, h, h))
+                .map(|h| {
+                    let safe = self.escape_html(h);
+                    format!(
+                        r#"<li><a href="/analysis/history/{}">{}</a></li>"#,
+                        safe, safe
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join("\n");
             format!("<ul>{}</ul>", links)
@@ -98,7 +104,11 @@ impl Visualizer for VisualizerImpl {
             overview.critical_alerts,
             overview.collection_rate_per_hour,
             hostnames_html,
-            DateTime::<Utc>::from(SystemTime::now()).format("%Y-%m-%d %H:%M:%S"),
+            self.escape_html(
+                &DateTime::<Utc>::from(SystemTime::now())
+                    .format("%Y-%m-%d %H:%M:%S")
+                    .to_string(),
+            ),
             HTML_FOOTER
         );
 
@@ -125,11 +135,11 @@ impl Visualizer for VisualizerImpl {
                         <div class="timestamp">Started: {} | Severity: {} | Action Required: {}</div>
                     </div>"#,
                     alert_class,
-                    alert.hostname,
-                    alert.service_name,
+                    self.escape_html(&alert.hostname),
+                    self.escape_html(&alert.service_name),
                     alert.error_count,
-                    alert.started_at,
-                    alert.severity,
+                    self.escape_html(&alert.started_at),
+                    self.escape_html(&alert.severity),
                     if alert.needs_action { "Yes" } else { "No" }
                 )
             }).collect::<Vec<_>>().join("\n")
@@ -168,11 +178,11 @@ impl Visualizer for VisualizerImpl {
                         <strong>{}/{}</strong> - {} ({})
                         <div class="timestamp">{}</div>
                     </div>"#,
-                        analysis.service_name,
-                        analysis.analysis_type,
-                        analysis.severity,
-                        analysis.hostname,
-                        analysis.analysed_at
+                        self.escape_html(&analysis.service_name),
+                        self.escape_html(&analysis.analysis_type),
+                        self.escape_html(&analysis.severity),
+                        self.escape_html(&analysis.hostname),
+                        self.escape_html(&analysis.analysed_at)
                     )
                 })
                 .collect::<Vec<_>>()
@@ -225,14 +235,14 @@ impl Visualizer for VisualizerImpl {
                             <td>{}</td>
                             <td><a href="/analysis/details/{}">Details</a></td>
                         </tr>"#,
-                        analysis.analysed_at,
-                        analysis.service_name,
-                        analysis.analysis_type,
-                        analysis.severity,
+                        self.escape_html(&analysis.analysed_at),
+                        self.escape_html(&analysis.service_name),
+                        self.escape_html(&analysis.analysis_type),
+                        self.escape_html(&analysis.severity),
                         analysis.entries_count,
-                        analysis.model,
-                        analysis.first_error,
-                        analysis.last_error,
+                        self.escape_html(&analysis.model),
+                        self.escape_html(&analysis.first_error),
+                        self.escape_html(&analysis.last_error),
                         analysis.id
                     )
                 })
@@ -272,7 +282,10 @@ impl Visualizer for VisualizerImpl {
 </div>
 {}
             "#,
-            HTML_HEADER, hostname, history_html, HTML_FOOTER
+            HTML_HEADER,
+            self.escape_html(&hostname),
+            history_html,
+            HTML_FOOTER
         );
 
         Ok(html)
@@ -318,25 +331,42 @@ impl Visualizer for VisualizerImpl {
             "#,
             HTML_HEADER,
             details.id,
-            details.hostname,
-            details.service_name,
-            details.analysis_type,
-            details.analysed_at,
-            details.severity,
-            details.model,
+            self.escape_html(&details.hostname),
+            self.escape_html(&details.service_name),
+            self.escape_html(&details.analysis_type),
+            self.escape_html(&details.analysed_at),
+            self.escape_html(&details.severity),
+            self.escape_html(&details.model),
             if details.needs_user_action {
                 "Yes"
             } else {
                 "No"
             },
-            details.summary.replace("\n", "<br>"),
+            self.escape_html(&details.summary).replace("\n", "<br>"),
             details.entries_count,
-            details.first_error,
-            details.last_error,
-            details.hostname,
+            self.escape_html(&details.first_error),
+            self.escape_html(&details.last_error),
+            self.escape_html(&details.hostname),
             HTML_FOOTER
         );
 
         Ok(html)
+    }
+}
+
+impl VisualizerImpl {
+    fn escape_html(&self, value: &str) -> String {
+        let mut escaped = String::with_capacity(value.len());
+        for ch in value.chars() {
+            match ch {
+                '&' => escaped.push_str("&amp;"),
+                '<' => escaped.push_str("&lt;"),
+                '>' => escaped.push_str("&gt;"),
+                '"' => escaped.push_str("&quot;"),
+                '\'' => escaped.push_str("&#39;"),
+                _ => escaped.push(ch),
+            }
+        }
+        escaped
     }
 }

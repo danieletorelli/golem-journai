@@ -27,7 +27,7 @@ Collects and stores journal entries from monitored hosts.
 **API Endpoints:**
 
 - `POST /collect/{hostname}` - Ingest journal entries
-- `GET /entries/{hostname}` - Query entries with filters (since, priority, message contains)
+- `GET /entries/{hostname}` - Query entries with filters (since, priority, contains)
 - `GET /errors/{hostname}` - Get detected error spikes
 
 ### 2. **Analyzer** (`journai:analyzer`)
@@ -171,10 +171,13 @@ Send journal entries to the collector:
 curl -X POST http://journai.localhost:9006/collect/myhost \
   -H "Content-Type: application/json" \
   -d '[{
-    "timestamp": 1234567890.0,
-    "priority": 3,
+    "boot_id": "b4df5e7d8e4f4b5a8d2a7ab2c1a0ef9a",
+    "hostname": "myhost",
+    "machine_id": "c1d2e3f4a5b67890c1d2e3f4a5b67890",
+    "priority": "3",
     "message": "Error occurred in service",
-    "service": "myapp"
+    "date": 1234567890.0,
+    "runtime_scope": "system"
     ...
   }]'
 ```
@@ -262,6 +265,19 @@ open http://journai.localhost:9006/dashboard/overview
 Edit the component's `golem.yaml` to add WASM dependencies
 from [Golem AI](https://github.com/golemcloud/golem-ai/releases) (please remember to configure the correct
 API key depending on the chosen LLM and the model name).
+
+### Docker Compose Database Defaults
+
+The `common-env` component template in `common-rust/golem.yaml` provides defaults for most environment variables.
+
+If you use the `docker-compose.yml` Postgres service, override the database settings to:
+
+```bash
+DATABASE_HOST=journai_test
+DATABASE_USER=postgres
+DATABASE_DB=postgres
+DATABASE_PASSWORD=journai
+```
 
 ## API Reference
 

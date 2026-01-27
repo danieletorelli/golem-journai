@@ -8,7 +8,7 @@ pub fn get_entries_by_ids(
     ids: Vec<JournalEntryId>,
     limit: u16,
 ) -> Result<Vec<JournalEntry>, APIError> {
-    if ids.is_empty() {
+    if ids.is_empty() || limit == 0 {
         return Ok(vec![]);
     }
 
@@ -91,7 +91,7 @@ pub fn insert_analysis(
         e
     };
 
-    let result = conn
+    let result = transaction
         .query(INSERT_ANALYSIS_QUERY, insert_analysis_params)
         .map_err(|e| rollback_and_error(APIErrorType::Fetch.of_postgres(e)))?;
 
@@ -130,7 +130,8 @@ pub fn insert_analysis(
             log::trace!("Params: {:?}", insert_link_params);
         }
 
-        conn.execute(&insert_link_sql, insert_link_params)
+        transaction
+            .execute(&insert_link_sql, insert_link_params)
             .map_err(|e| rollback_and_error(APIErrorType::Insert.of_postgres(e)))?;
     }
 

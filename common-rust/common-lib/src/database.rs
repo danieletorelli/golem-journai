@@ -63,12 +63,28 @@ impl PostgresDatabase {
     fn create_table(connection: &DbConnection) -> Result<(), Error> {
         log::debug!("Initializing database");
 
+        let trgm_available = match connection.execute(CREATE_EXTENSIONS_QUERY, vec![]) {
+            Ok(_) => true,
+            Err(e) => {
+                log::warn!(
+                    "Skipping extension creation due to error: {:?}. Query: {}",
+                    e,
+                    CREATE_EXTENSIONS_QUERY
+                );
+                false
+            }
+        };
+
         let transaction = connection.begin_transaction()?;
 
         let all_queries = CREATE_TABLES_QUERY.iter().chain(CREATE_INDEXES_QUERIES);
 
         for query in all_queries {
-            if let Err(e) = connection.execute(query, vec![]) {
+            if !trgm_available && query.contains("gin_trgm_ops") {
+                log::warn!("Skipping trigram index creation (pg_trgm not available).");
+                continue;
+            }
+            if let Err(e) = transaction.execute(query, vec![]) {
                 log::error!("Failed to execute query: {:?}. Query: {}", e, query);
                 let _ = transaction.rollback();
                 return Err(e);
@@ -127,8 +143,9 @@ const CREATE_TABLES_QUERY: &[&str] = &[
         PRIMARY KEY (entry_id, analysis_id));"#,
 ];
 
+const CREATE_EXTENSIONS_QUERY: &str = r#"CREATE EXTENSION IF NOT EXISTS pg_trgm;"#;
+
 const CREATE_INDEXES_QUERIES: &[&str] = &[
-    r#"CREATE EXTENSION IF NOT EXISTS pg_trgm;"#,
     r#"CREATE UNIQUE INDEX IF NOT EXISTS idx_entries_unique
        ON entries(boot_id, hostname, machine_id, md5(message), COALESCE(pid, ''), COALESCE(uid, ''), COALESCE(gid, ''), date);"#,
     r#"CREATE INDEX IF NOT EXISTS idx_entries_hostname_date_priority ON entries(hostname, date DESC, priority);"#,
@@ -145,6 +162,11 @@ impl FromDbValue for String {
     fn from_db_value(value: &DbValue) -> Self {
         match value {
             DbValue::Text(s) => s.clone(),
+            DbValue::Int2(i) => i.to_string(),
+            DbValue::Int4(i) => i.to_string(),
+            DbValue::Int8(i) => i.to_string(),
+            DbValue::Float4(f) => f.to_string(),
+            DbValue::Float8(f) => f.to_string(),
             DbValue::Timestamp(t) => {
                 let ndt = NaiveDateTime::new(
                     NaiveDate::from_ymd_opt(t.date.year, t.date.month as u32, t.date.day as u32)
