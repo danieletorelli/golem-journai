@@ -145,20 +145,21 @@ golem deploy --preset release
 
 ## Configuration (environment variables)
 
-| Environment Variable        | Description                                     | Default Value (Debug)         | Default Value (Release)    |
-|-----------------------------|-------------------------------------------------|-------------------------------|----------------------------|
-| `DATABASE_TYPE`             | Type of database used (supported: `postgresql`) | `postgresql`                  | `postgresql`               |
-| `DATABASE_INIT`             | Indicates whether to initialize the database    | `"true"`                      | `"true"`                   |
-| `DATABASE_HOST`             | Database host                                   | `host.docker.internal`        | `host.docker.internal`     |
-| `DATABASE_USER`             | Database user                                   | `postgres`                    | `postgres`                 |
-| `DATABASE_DB`               | Database name                                   | `postgres`                    | `postgres`                 |
-| `DATABASE_PASSWORD`         | Database password                               | `journai`                     | `journai`                  |
-| `DATABASE_QUERY_LOG`        | Enables logging of database queries             | `"false"`                     | `"false"`                  |
-| `OPENROUTER_API_KEY`        | API key for OpenRouter                          | `{{ OPENROUTER_API_KEY }}`    | `{{ OPENROUTER_API_KEY }}` |
-| `JOURNAI_LLM_MODEL`         | LLM model used for analysis                     | `"xiaomi/mimo-v2-flash:free"` | `"perplexity/sonar-pro"`   |
-| `JOURNAI_LLM_ENTRIES_LIMIT` | Limit of entries for LLM analysis               | `(not defined, default: 500)` | `"3000"`                   |
-| `RUST_LOG`                  | Logging level for Rust                          | `debug`                       | `info`                     |
-| `GOLEM_LLM_LOG`             | Logging level for Golem's LLM module            | `debug`                       | `warn`                     |
+| Environment Variable               | Description                                     | Default Value (Debug)         | Default Value (Release)      |
+|------------------------------------|-------------------------------------------------|-------------------------------|------------------------------|
+| `DATABASE_TYPE`                    | Type of database used (supported: `postgresql`) | `postgresql`                  | `postgresql`                 |
+| `DATABASE_INIT`                    | Indicates whether to initialize the database    | `"true"`                      | `"true"`                     |
+| `DATABASE_HOST`                    | Database host                                   | `host.docker.internal`        | `host.docker.internal`       |
+| `DATABASE_USER`                    | Database user                                   | `postgres`                    | `postgres`                   |
+| `DATABASE_DB`                      | Database name                                   | `postgres`                    | `postgres`                   |
+| `DATABASE_PASSWORD`                | Database password                               | `journai`                     | `journai`                    |
+| `DATABASE_QUERY_LOG`               | Enables logging of database queries             | `"false"`                     | `"false"`                    |
+| `OPENROUTER_API_KEY`               | API key for OpenRouter                          | `{{ OPENROUTER_API_KEY }}`    | `{{ OPENROUTER_API_KEY }}`   |
+| `JOURNAI_LLM_MODEL`                | LLM model used for analysis                     | `"xiaomi/mimo-v2-flash:free"` | `"perplexity/sonar-pro"`     |
+| `JOURNAI_LLM_ENTRIES_LIMIT`        | Limit of entries for LLM analysis               | `(not defined, default: 500)` | `"3000"`                     |
+| `JOURNAI_LLM_CONTEXT_WINDOW_LIMIT` | Limit of events in the LLM context window       | `(not defined, default: 20)`  | `(not defined, default: 20)` |
+| `RUST_LOG`                         | Logging level for Rust                          | `debug`                       | `info`                       |
+| `GOLEM_LLM_LOG`                    | Logging level for Golem's LLM module            | `debug`                       | `warn`                       |
 
 ## Usage
 

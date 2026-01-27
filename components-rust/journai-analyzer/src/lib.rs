@@ -1,6 +1,6 @@
 mod database;
 
-use common_lib::model::{APIError, APIErrorType, ServiceErrors, SpikeEventAssertion};
+use common_lib::model::{APIError, APIErrorType, JournalEntry, ServiceErrors, SpikeEventAssertion};
 use common_lib::Analyzer;
 use golem_rust::agent_implementation;
 use golem_rust::golem_ai::golem::llm::llm;
@@ -28,10 +28,9 @@ impl Analyzer for AnalyzerImpl {
         })?;
 
         let (events, spike_event_summary) = self.execute_spike_summary_llm_call(&model, &errors)?;
-        let (events, spike_event_assertion) =
-            self.execute_spike_structured_llm_call(&model, &events)?;
+        let spike_event_assertion = self.execute_spike_structured_llm_call(&model, &events)?;
 
-        self.events = events;
+        self.events = self.compact_events(events);
 
         if !spike_event_summary.trim().is_empty() {
             database::insert_analysis(
@@ -51,7 +50,8 @@ impl Analyzer for AnalyzerImpl {
 }
 
 impl AnalyzerImpl {
-    const LLM_ENTRIES_LIMIT_DEFAULT: u16 = 500;
+    const LLM_ENTRIES_LIMIT: u16 = 500;
+    const LLM_CONTEXT_WINDOW_LIMIT: usize = 20;
     const SPIKE_SUMMARY_SYSTEM_PROMPT: &str = r#"You are an expert Senior Site Reliability Engineer (SRE).
         Your task is to analyze systemd journal entries to identify the root cause of service failures or error spikes.
         Provide a professional, technical, and concise analysis for on-call engineers.
@@ -65,17 +65,45 @@ impl AnalyzerImpl {
         This is VERY IMPORTANT as I need to parse this response and I need a strict JSON."#;
     const SPIKE_STRUCTURED_USER_PROMPT: &str = "How critical is this error spike?";
 
-    fn compose_spike_summary_user_prompt(
-        &self,
-        start: f64,
-        end: f64,
-        errors_count: u64,
-        errors: String,
-    ) -> String {
+    fn compose_analysis_request_header(&self, start: f64, end: f64, errors_count: u64) -> String {
         format!(
             r#"Analysis Request for host: "{host}", service: "{service}"
             Time Range: {start} to {end} (Unix timestamps)
-            Incident Profile: Detected a spike of {errors_count} errors in this window.
+            Incident Profile: Detected a spike of {errors_count} errors in this window."#,
+            host = self.hostname,
+            service = self.service,
+            start = start,
+            end = end,
+            errors_count = errors_count,
+        )
+    }
+
+    fn compose_spike_summary_user_prompt(
+        &self,
+        errors: &ServiceErrors,
+        entries: &[JournalEntry],
+    ) -> String {
+        let header = self.compose_analysis_request_header(
+            errors.started_at,
+            errors.last_at,
+            errors.error_count,
+        );
+
+        let entries_json = entries
+            .iter()
+            .filter_map(|entry| {
+                serde_json::to_string(entry)
+                    .map_err(|e| {
+                        log::warn!("Failed to serialize entry: {}", e);
+                        e
+                    })
+                    .ok()
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+
+        format!(
+            r#"{header}
 
             Please analyze the following journal entries and provide:
             1. **Summary**: A high-level overview of the incident (what happened and impact).
@@ -84,13 +112,44 @@ impl AnalyzerImpl {
             4. **Checklist of Actions**: 3-5 concrete commands or checks for the on-call engineer to run immediately.
 
             Journal Entries (JSON format):
-            {errors}"#,
-            host = self.hostname,
-            service = self.service,
-            start = start,
-            end = end,
-            errors_count = errors_count,
-            errors = errors,
+            {entries_json}"#,
+            header = header,
+            entries_json = entries_json,
+        )
+    }
+
+    fn compose_spike_summary_user_prompt_lite(
+        &self,
+        errors: &ServiceErrors,
+        entries: &[JournalEntry],
+    ) -> String {
+        let header = self.compose_analysis_request_header(
+            errors.started_at,
+            errors.last_at,
+            errors.error_count,
+        );
+
+        let mut unique_messages = Vec::new();
+        for entry in entries {
+            let msg = if entry.message.len() > 200 {
+                format!("{}...", &entry.message[..200])
+            } else {
+                entry.message.clone()
+            };
+            if !unique_messages.contains(&msg) {
+                unique_messages.push(msg);
+            }
+            if unique_messages.len() >= 5 {
+                break;
+            }
+        }
+        let error_sample = unique_messages.join("\n");
+
+        format!(
+            r#"{header}
+            Error Sample (first unique messages):\n{error_sample}"#,
+            header = header,
+            error_sample = error_sample
         )
     }
 
@@ -105,31 +164,15 @@ impl AnalyzerImpl {
             .unwrap_or_else(|| {
                 log::warn!(
                     "Invalid or missing JOURNAI_LLM_ENTRIES_LIMIT, using default: {}",
-                    Self::LLM_ENTRIES_LIMIT_DEFAULT
+                    Self::LLM_ENTRIES_LIMIT
                 );
-                Self::LLM_ENTRIES_LIMIT_DEFAULT
+                Self::LLM_ENTRIES_LIMIT
             });
 
         let entries = database::get_entries_by_ids(errors.entries.clone(), entries_limit)?;
-        let entries_json = entries
-            .iter()
-            .filter_map(|entry| {
-                serde_json::to_string(entry)
-                    .map_err(|e| {
-                        log::warn!("Failed to serialize entry: {}", e);
-                        e
-                    })
-                    .ok()
-            })
-            .collect::<Vec<_>>()
-            .join("\n\n");
 
-        let user_prompt = self.compose_spike_summary_user_prompt(
-            errors.started_at,
-            errors.last_at,
-            errors.error_count,
-            entries_json,
-        );
+        let user_prompt = self.compose_spike_summary_user_prompt(errors, &entries);
+        let lite_user_prompt = self.compose_spike_summary_user_prompt_lite(errors, &entries);
 
         let config = llm::Config {
             model: model.to_string(),
@@ -142,25 +185,36 @@ impl AnalyzerImpl {
         };
 
         log::debug!("Sending request to LLM ({:?})", config);
-        let mut events = vec![
-            llm::Event::Message(llm::Message {
-                role: llm::Role::System,
-                name: None,
-                content: vec![llm::ContentPart::Text(
-                    Self::SPIKE_SUMMARY_SYSTEM_PROMPT.to_string(),
-                )],
-            }),
-            llm::Event::Message(llm::Message {
-                role: llm::Role::User,
-                name: Some("JournAI".to_string()),
-                content: vec![llm::ContentPart::Text(user_prompt)],
-            }),
-        ];
 
-        let response = llm::send(&events, &config)
+        let system_message = llm::Message {
+            role: llm::Role::System,
+            name: None,
+            content: vec![llm::ContentPart::Text(
+                Self::SPIKE_SUMMARY_SYSTEM_PROMPT.to_string(),
+            )],
+        };
+
+        let previous_context: Vec<llm::Event> = self
+            .events
+            .iter()
+            .filter(|event| match event {
+                llm::Event::Message(msg) => msg.role != llm::Role::System,
+                _ => true,
+            })
+            .cloned()
+            .collect();
+
+        let mut call_events = vec![llm::Event::Message(system_message)];
+        call_events.append(&mut previous_context.clone());
+        call_events.push(llm::Event::Message(llm::Message {
+            role: llm::Role::User,
+            name: Some("JournAI".to_string()),
+            content: vec![llm::ContentPart::Text(user_prompt)],
+        }));
+
+        let response = llm::send(&call_events, &config)
             .map(|r| {
                 log::debug!("LLM Response: {:?}", r);
-                events.push(llm::Event::Response(r.clone()));
                 r
             })
             .map_err(|e| {
@@ -184,14 +238,23 @@ impl AnalyzerImpl {
             ));
         }
 
-        Ok((events, response_text))
+        // Build history-optimized events: Previous context + Lite User + Response
+        let mut history_events = previous_context;
+        history_events.push(llm::Event::Message(llm::Message {
+            role: llm::Role::User,
+            name: Some("JournAI".to_string()),
+            content: vec![llm::ContentPart::Text(lite_user_prompt)],
+        }));
+        history_events.push(llm::Event::Response(response));
+
+        Ok((history_events, response_text))
     }
 
     fn execute_spike_structured_llm_call(
         &self,
         model: &str,
         events: &[llm::Event],
-    ) -> Result<(Vec<llm::Event>, SpikeEventAssertion), APIError> {
+    ) -> Result<SpikeEventAssertion, APIError> {
         let response_format = serde_json::json!({
             "type": "json_schema",
             "json_schema": {
@@ -228,32 +291,35 @@ impl AnalyzerImpl {
 
         log::debug!("Sending request to LLM ({:?})", config);
 
-        let request_events: Vec<llm::Event> = events
+        // Optimization: For structured analysis, we only need the conversation history (Summaries and Lite User info)
+        // and the current specific instructions. We avoid previous System prompts to reduce tokens and confusion.
+        let mut request_events: Vec<llm::Event> = vec![llm::Event::Message(llm::Message {
+            role: llm::Role::System,
+            name: None,
+            content: vec![llm::ContentPart::Text(format!(
+                "{}\n{}",
+                Self::SPIKE_STRUCTURED_SYSTEM_PROMPT,
+                response_format
+            ))],
+        })];
+
+        let mut conversation_history: Vec<llm::Event> = events
             .iter()
             .filter(|event| {
-                matches!(event, llm::Event::Message(m) if m.role == llm::Role::System)
-                    || matches!(event, llm::Event::Response(_))
+                matches!(event, llm::Event::Response(_))
+                    || matches!(event, llm::Event::Message(m) if m.role == llm::Role::User)
             })
             .cloned()
-            .chain(vec![
-                llm::Event::Message(llm::Message {
-                    role: llm::Role::System,
-                    name: None,
-                    content: vec![llm::ContentPart::Text(format!(
-                        "{}\n{}",
-                        Self::SPIKE_STRUCTURED_SYSTEM_PROMPT,
-                        response_format
-                    ))],
-                }),
-                llm::Event::Message(llm::Message {
-                    role: llm::Role::User,
-                    name: Some("JournAI".to_string()),
-                    content: vec![llm::ContentPart::Text(
-                        Self::SPIKE_STRUCTURED_USER_PROMPT.to_string(),
-                    )],
-                }),
-            ])
             .collect();
+
+        request_events.append(&mut conversation_history);
+        request_events.push(llm::Event::Message(llm::Message {
+            role: llm::Role::User,
+            name: Some("JournAI".to_string()),
+            content: vec![llm::ContentPart::Text(
+                Self::SPIKE_STRUCTURED_USER_PROMPT.to_string(),
+            )],
+        }));
 
         let response = llm::send(&request_events, &config)
             .map(|r| {
@@ -302,30 +368,26 @@ impl AnalyzerImpl {
             APIError::Other(format!("Invalid schema in LLM response: {}", e))
         })?;
 
-        let final_events = events
-            .iter()
-            .cloned()
-            .chain(vec![
-                llm::Event::Message(llm::Message {
-                    role: llm::Role::System,
-                    name: None,
-                    content: vec![llm::ContentPart::Text(format!(
-                        "{}\n{}",
-                        Self::SPIKE_STRUCTURED_SYSTEM_PROMPT,
-                        response_format
-                    ))],
-                }),
-                llm::Event::Message(llm::Message {
-                    role: llm::Role::User,
-                    name: Some("JournAI".to_string()),
-                    content: vec![llm::ContentPart::Text(
-                        Self::SPIKE_STRUCTURED_USER_PROMPT.to_string(),
-                    )],
-                }),
-                llm::Event::Response(response),
-            ])
-            .collect();
+        Ok(assertion)
+    }
 
-        Ok((final_events, assertion))
+    fn compact_events(&self, events: Vec<llm::Event>) -> Vec<llm::Event> {
+        let context_window_limit: usize = env::var("JOURNAI_LLM_CONTEXT_WINDOW_LIMIT")
+            .ok()
+            .and_then(|limit| limit.parse().ok())
+            .unwrap_or_else(|| {
+                log::warn!(
+                    "Invalid or missing JOURNAI_LLM_CONTEXT_WINDOW_LIMIT, using default: {}",
+                    Self::LLM_CONTEXT_WINDOW_LIMIT
+                );
+                Self::LLM_CONTEXT_WINDOW_LIMIT
+            });
+
+        let mut all_events = events;
+        if all_events.len() > context_window_limit {
+            let start_index = all_events.len() - context_window_limit;
+            all_events = all_events.drain(start_index..).collect();
+        }
+        all_events
     }
 }
