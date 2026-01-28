@@ -27,7 +27,7 @@ pub trait Analyzer {
     async fn analyze_spike(&mut self, errors: ServiceErrors) -> Result<String, APIError>;
 }
 
-#[agent_definition]
+#[agent_definition(ephemeral)]
 pub trait Visualizer {
     fn new() -> Self;
 
