@@ -331,6 +331,19 @@ impl FromDbValue for u8 {
     }
 }
 
+impl FromDbValue for bool {
+    fn from_db_value(value: &DbValue) -> Self {
+        match value {
+            DbValue::Boolean(b) => *b,
+            DbValue::Int2(i) => *i != 0,
+            DbValue::Int4(i) => *i != 0,
+            DbValue::Int8(i) => *i != 0,
+            DbValue::Float8(f) => *f != 0.0,
+            _ => false,
+        }
+    }
+}
+
 impl FromDbValue for Option<String> {
     fn from_db_value(value: &DbValue) -> Self {
         match value {

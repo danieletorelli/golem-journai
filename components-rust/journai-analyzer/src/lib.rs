@@ -131,11 +131,7 @@ impl AnalyzerImpl {
 
         let mut unique_messages = Vec::new();
         for entry in entries {
-            let msg = if entry.message.len() > 200 {
-                format!("{}...", &entry.message[..200])
-            } else {
-                entry.message.clone()
-            };
+            let msg = Self::truncate_message(&entry.message, 200);
             if !unique_messages.contains(&msg) {
                 unique_messages.push(msg);
             }
@@ -151,6 +147,13 @@ impl AnalyzerImpl {
             header = header,
             error_sample = error_sample
         )
+    }
+
+    fn truncate_message(message: &str, limit: usize) -> String {
+        match message.char_indices().nth(limit) {
+            Some((idx, _)) => format!("{}...", &message[..idx]),
+            None => message.to_string(),
+        }
     }
 
     fn execute_spike_summary_llm_call(
@@ -487,6 +490,36 @@ mod tests {
             .unwrap_or("");
         let sample_lines: Vec<&str> = sample_section.lines().collect();
         assert!(sample_lines.len() <= 5);
+    }
+
+    #[test]
+    fn truncate_message_keeps_short_or_exact_limit() {
+        // Verify truncation does not add ellipsis when not needed.
+        let short_message = "short message";
+        assert_eq!(
+            AnalyzerImpl::truncate_message(short_message, 200),
+            short_message
+        );
+
+        let exact_message = "a".repeat(200);
+        assert_eq!(
+            AnalyzerImpl::truncate_message(&exact_message, 200),
+            exact_message
+        );
+    }
+
+    #[test]
+    fn truncate_message_handles_utf8() {
+        // Verify truncation respects UTF-8 boundaries.
+        let multibyte = "\u{00E9}".repeat(250);
+        let truncated = AnalyzerImpl::truncate_message(&multibyte, 200);
+
+        assert!(truncated.ends_with("..."));
+        assert_eq!(truncated.chars().count(), 203);
+        assert_eq!(
+            truncated.trim_end_matches("...").chars().count(),
+            200
+        );
     }
 
     #[test]

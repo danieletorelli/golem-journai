@@ -74,6 +74,20 @@ fn extract_converts_basic_types() {
     assert_eq!(extract::<i64>(&DbValue::Int2(7)), 7);
     assert_eq!(extract::<u64>(&DbValue::Int8(10)), 10);
     assert_eq!(extract::<u8>(&DbValue::Int2(3)), 3);
+    assert!(extract::<bool>(&DbValue::Boolean(true)));
+    assert!(!extract::<bool>(&DbValue::Boolean(false)));
+}
+
+#[test]
+fn extract_handles_null_and_boolean_fallbacks() {
+    // Verify NULLs and numeric fallbacks map to expected booleans.
+    assert!(!extract::<bool>(&DbValue::Null));
+    assert!(extract::<bool>(&DbValue::Int2(1)));
+    assert!(!extract::<bool>(&DbValue::Int2(0)));
+    assert!(extract::<bool>(&DbValue::Int8(2)));
+    assert!(!extract::<bool>(&DbValue::Float8(0.0)));
+    assert!(extract::<bool>(&DbValue::Float8(0.1)));
+    assert!(extract::<Option<String>>(&DbValue::Null).is_none());
 }
 
 #[test]

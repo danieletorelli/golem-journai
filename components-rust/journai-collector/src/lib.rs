@@ -163,6 +163,17 @@ mod tests {
     }
 
     #[test]
+    fn matches_filters_accepts_priority_boundaries() {
+        // Verify priority bounds are inclusive.
+        let collector = CollectorImpl::new("host-a".to_string());
+        let min_priority = sample_entry("host-a", "0", "ok");
+        let max_priority = sample_entry("host-a", "7", "ok");
+
+        assert!(collector.matches_filters(&min_priority));
+        assert!(collector.matches_filters(&max_priority));
+    }
+
+    #[test]
     fn matches_filters_rejects_invalid_entries() {
         // Verify invalid host, priority, or message is rejected
         let collector = CollectorImpl::new("host-a".to_string());
@@ -172,6 +183,9 @@ mod tests {
 
         let invalid_priority = sample_entry("host-a", "9", "ok");
         assert!(!collector.matches_filters(&invalid_priority));
+
+        let non_numeric_priority = sample_entry("host-a", "nope", "ok");
+        assert!(!collector.matches_filters(&non_numeric_priority));
 
         let empty_message = sample_entry("host-a", "3", "   ");
         assert!(!collector.matches_filters(&empty_message));

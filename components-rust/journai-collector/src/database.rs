@@ -146,7 +146,14 @@ pub fn get_last_analysis_timestamp(
     }
 
     conn.query(FETCH_LAST_ANALYSIS_TIMESTAMP_QUERY, params)
-        .map(|result| result.rows.first().map(|row| extract(&row.values[0])))
+        .map(|result| {
+            result.rows.first().and_then(|row| {
+                row.values.first().and_then(|value| match value {
+                    DbValue::Null => None,
+                    _ => Some(extract(value)),
+                })
+            })
+        })
         .map_err(|e| APIErrorType::Fetch.of_postgres(e))
 }
 

@@ -132,7 +132,7 @@ pub fn get_active_alerts() -> Result<Vec<AlertInfo>, APIError> {
                         severity: extract(&v[2]),
                         error_count: extract(&v[3]),
                         started_at: extract(&v[4]),
-                        needs_action: extract::<u8>(&v[5]) != 0,
+                        needs_action: extract::<bool>(&v[5]),
                     }
                 })
                 .collect()
@@ -216,7 +216,7 @@ pub fn get_analysis_history(hostname: String) -> Result<Vec<DetailedAnalysisInfo
                         last_error: extract(&v[8]),
                         model: extract(&v[9]),
                         summary: extract(&v[10]),
-                        needs_user_action: extract::<u8>(&v[11]) != 0,
+                        needs_user_action: extract::<bool>(&v[11]),
                     }
                 })
                 .collect()
@@ -252,7 +252,7 @@ pub fn get_analysis_details(analysis_id: i32) -> Result<DetailedAnalysisInfo, AP
                 last_error: extract(&v[8]),
                 model: extract(&v[9]),
                 summary: extract(&v[10]),
-                needs_user_action: extract::<u8>(&v[11]) != 0,
+                needs_user_action: extract::<bool>(&v[11]),
             }
         })
         .ok_or_else(|| {
