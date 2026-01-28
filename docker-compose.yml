@@ -1,0 +1,28 @@
+services:
+  golem:
+    image: golem
+    build:
+      context: .
+      dockerfile: Dockerfile.downloader
+      pull: true
+      args:
+        GOLEM_VERSION: ${GOLEM_VERSION:-1.4.2}
+        GOLEM_ARCH: ${GOLEM_ARCH:-aarch64-unknown-linux-gnu}
+    container_name: golem
+    ports:
+      - "9006:9006"
+      - "9881:9881"
+
+  journai_test:
+    image: postgres:alpine
+    container_name: journai_test
+    environment:
+      POSTGRES_PASSWORD: journai
+    volumes:
+      - journai_test_data:/var/lib/postgresql
+    ports:
+      - "5432:5432"
+    command: postgres -c log_statement=all -c log_destination=stderr
+
+volumes:
+  journai_test_data:

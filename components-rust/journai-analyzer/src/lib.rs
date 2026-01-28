@@ -1,6 +1,8 @@
 mod database;
 
-use common_lib::model::{APIError, APIErrorType, JournalEntry, ServiceErrors, SpikeEventAssertion};
+use common_lib::model::{
+    APIError, APIErrorType, JournalEntry, ServiceErrors, SpikeEventAssertion, SpikeEventSeverity,
+};
 use common_lib::Analyzer;
 use golem_rust::agent_implementation;
 use golem_rust::golem_ai::golem::llm::llm;
@@ -26,6 +28,20 @@ impl Analyzer for AnalyzerImpl {
         let model = env::var("JOURNAI_LLM_MODEL").map_err(|_| {
             APIErrorType::LLM.of_string("JOURNAI_LLM_MODEL env variable is not defined".to_string())
         })?;
+
+        if Self::should_mock_llm() {
+            let summary = self.build_mock_summary(&errors);
+            let assertion = Self::build_mock_assertion();
+            database::insert_analysis(
+                self.hostname.clone(),
+                "spike".to_string(),
+                model,
+                summary.clone(),
+                assertion,
+                errors.entries,
+            )?;
+            return Ok(summary);
+        }
 
         let (events, spike_event_summary) = self.execute_spike_summary_llm_call(&model, &errors)?;
         let spike_event_assertion = self.execute_spike_structured_llm_call(&model, &events)?;
@@ -64,6 +80,28 @@ impl AnalyzerImpl {
         Do not include any additional text, formatting or explanations.
         This is VERY IMPORTANT as I need to parse this response and I need a strict JSON."#;
     const SPIKE_STRUCTURED_USER_PROMPT: &str = "How critical is this error spike?";
+
+    fn should_mock_llm() -> bool {
+        env::var("JOURNAI_LLM_MOCK").is_ok_and(|value| value == "true")
+    }
+
+    fn build_mock_summary(&self, errors: &ServiceErrors) -> String {
+        format!(
+            "Mock analysis for host {} service {}: {} errors between {} and {}.",
+            self.hostname,
+            self.service,
+            errors.error_count,
+            errors.started_at,
+            errors.last_at
+        )
+    }
+
+    fn build_mock_assertion() -> SpikeEventAssertion {
+        SpikeEventAssertion {
+            severity: SpikeEventSeverity::High,
+            needs_user_action: true,
+        }
+    }
 
     fn compose_analysis_request_header(&self, start: f64, end: f64, errors_count: u64) -> String {
         format!(

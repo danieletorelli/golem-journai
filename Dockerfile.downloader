@@ -1,0 +1,25 @@
+FROM ubuntu:latest AS downloader
+
+ARG GOLEM_VERSION=1.4.2
+ARG GOLEM_ARCH=x86_64-unknown-linux-gnu
+
+RUN apt-get update && apt-get install -y curl
+
+WORKDIR /usr/src
+
+RUN if [ "$GOLEM_VERSION" = "latest" ]; then \
+      url="https://github.com/golemcloud/golem/releases/latest/download/golem-${GOLEM_ARCH}"; \
+    else \
+      url="https://github.com/golemcloud/golem/releases/download/v${GOLEM_VERSION}/golem-${GOLEM_ARCH}"; \
+    fi && \
+    curl -Ssf -L -o golem "$url" && \
+    chmod +x golem && \
+    mv golem /usr/local/bin
+
+FROM ubuntu:latest
+
+RUN apt-get update && apt-get install -y openssl
+
+COPY --from=downloader /usr/local/bin/golem /usr/local/bin/golem
+
+ENTRYPOINT ["golem", "server", "run", "-vv"]
