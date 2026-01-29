@@ -6,11 +6,33 @@ E2E_HOSTNAME="${E2E_HOSTNAME:-e2e-$(date +%s)}"
 E2E_SERVICE="${E2E_SERVICE:-e2e-service}"
 WAIT_TIMEOUT="${WAIT_TIMEOUT:-60}"
 
+readonly BASE_URL E2E_HOSTNAME E2E_SERVICE WAIT_TIMEOUT
+
+E2E_BODY=""
+E2E_STATUS=""
+
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
     echo "Missing required command: $1" >&2
     exit 1
   fi
+}
+
+log_step() {
+  echo "$1"
+}
+
+die() {
+  echo "$1" >&2
+  exit 1
+}
+
+die_with_body() {
+  echo "$1" >&2
+  if [ -n "${E2E_BODY:-}" ]; then
+    printf '%s\n' "$E2E_BODY" >&2
+  fi
+  exit 1
 }
 
 wait_for_http() {
@@ -19,14 +41,12 @@ wait_for_http() {
   local start
   start=$(date +%s)
   while true; do
-    local code
-    code=$(curl -sS -o /dev/null -w "%{http_code}" "$url" || true)
-    if [ "$code" != "000" ]; then
+    fetch GET "$url"
+    if [ "$E2E_STATUS" != "000" ]; then
       return 0
     fi
     if [ $(( $(date +%s) - start )) -ge "$timeout" ]; then
-      echo "Timed out waiting for $url" >&2
-      exit 1
+      die_with_body "Timed out waiting for $url"
     fi
     sleep 2
   done
@@ -36,11 +56,20 @@ fetch() {
   local method="$1"
   local url="$2"
   local data="${3-}"
+  local response
+  local curl_status=0
   if [ -n "$data" ]; then
-    curl -sS -o "$E2E_BODY" -w "%{http_code}" -H "Content-Type: application/json" -X "$method" "$url" -d "$data"
+    response=$(curl -sS -H "Content-Type: application/json" -X "$method" "$url" -d "$data" -w $'\n%{http_code}') || curl_status=$?
   else
-    curl -sS -o "$E2E_BODY" -w "%{http_code}" -X "$method" "$url"
+    response=$(curl -sS -X "$method" "$url" -w $'\n%{http_code}') || curl_status=$?
   fi
+  if [ "$curl_status" -ne 0 ]; then
+    E2E_STATUS="000"
+    E2E_BODY=""
+    return 0
+  fi
+  E2E_STATUS="${response##*$'\n'}"
+  E2E_BODY="${response%$'\n'*}"
 }
 
 json_escape() {
@@ -89,169 +118,155 @@ build_payload() {
   printf '[%s]' "$joined"
 }
 
+assert_status() {
+  local status="$1"
+  local method="$2"
+  local url="$3"
+  if [ "$status" != "200" ]; then
+    die_with_body "$method $url failed with status $status"
+  fi
+}
+
+assert_json_success() {
+  local context="$1"
+  if ! jq -e '.success == true' <<<"$E2E_BODY" >/dev/null; then
+    die_with_body "$context"
+  fi
+}
+
+expect_body_contains() {
+  local needle="$1"
+  if ! grep -Fq "$needle" <<<"$E2E_BODY"; then
+    die_with_body "Expected response to contain: $needle"
+  fi
+}
+
+assert_collected_count() {
+  local expected="$1"
+  local message
+  message=$(jq -r '.message // ""' <<<"$E2E_BODY")
+  if [[ "$message" =~ Collected[[:space:]]+([0-9]+)[[:space:]]+entries ]]; then
+    if [ "${BASH_REMATCH[1]}" -ne "$expected" ]; then
+      die_with_body "Unexpected collect count: $message"
+    fi
+  else
+    die_with_body "Unexpected collect message: $message"
+  fi
+}
+
+expect_entries_count() {
+  local url="$1"
+  local expected="$2"
+  local count
+  fetch GET "$url"
+  assert_status "$E2E_STATUS" "GET" "$url"
+  assert_json_success "Entries response marked as failure"
+  count=$(jq -r '.results.count // empty' <<<"$E2E_BODY")
+  if ! [[ "$count" =~ ^[0-9]+$ ]]; then
+    die_with_body "Invalid entries count: $count"
+  fi
+  if [ "$count" -ne "$expected" ]; then
+    die_with_body "Expected $expected entries, got $count"
+  fi
+}
+
+expect_error_spikes() {
+  local url="$1"
+  local service="$2"
+  local expected="$3"
+  local service_count
+  fetch GET "$url"
+  assert_status "$E2E_STATUS" "GET" "$url"
+  assert_json_success "Error spikes response marked as failure"
+  if ! jq -e '.results | length > 0' <<<"$E2E_BODY" >/dev/null; then
+    die_with_body "No error spikes returned"
+  fi
+  service_count=$(jq -r --arg service "$service" '
+    .results[]
+    | select((.service_name // .["service-name"] // .service) == $service)
+    | (.error_count // .["error-count"] // .errorCount)
+  ' <<<"$E2E_BODY" | head -n1)
+  if [ -z "$service_count" ]; then
+    die_with_body "Service $service not found in spikes"
+  fi
+  if [ "$service_count" -ne "$expected" ]; then
+    die_with_body "Unexpected error spike count: $service_count"
+  fi
+}
+
+wait_for_analysis_id() {
+  local url="$1"
+  local timeout="$2"
+  local start
+  local analysis_id
+  start=$(date +%s)
+  while true; do
+    fetch GET "$url"
+    if [ "$E2E_STATUS" = "200" ] && ! grep -Fq "No analysis history found" <<<"$E2E_BODY"; then
+      analysis_id=$(grep -oE '/analysis/details/[0-9]+' <<<"$E2E_BODY" | head -n1 | awk -F/ '{print $4}')
+      if [ -n "$analysis_id" ]; then
+        printf '%s' "$analysis_id"
+        return 0
+      fi
+    fi
+    if [ $(( $(date +%s) - start )) -ge "$timeout" ]; then
+      die_with_body "Timed out waiting for analysis history"
+    fi
+    sleep 2
+  done
+}
+
 require_cmd curl
 require_cmd jq
 
-E2E_BODY="$(mktemp)"
-trap 'rm -f "$E2E_BODY"' EXIT
-
+log_step "Waiting for $BASE_URL to respond"
 wait_for_http "$BASE_URL/dashboard/overview" "$WAIT_TIMEOUT"
 
 base_ts=$(date +%s)
 payload=$(build_payload "$base_ts")
 
-echo "Posting entries to $BASE_URL/collect/$E2E_HOSTNAME"
-status=$(fetch POST "$BASE_URL/collect/$E2E_HOSTNAME" "$payload")
-if [ "$status" != "200" ]; then
-  echo "Collect request failed with status $status" >&2
-  cat "$E2E_BODY" >&2
-  exit 1
-fi
-
-if ! jq -e '.success == true' "$E2E_BODY" >/dev/null; then
-  echo "Collect response marked as failure" >&2
-  cat "$E2E_BODY" >&2
-  exit 1
-fi
-
-message=$(jq -r '.message // ""' "$E2E_BODY")
-if [[ "$message" =~ Collected[[:space:]]+([0-9]+)[[:space:]]+entries ]]; then
-  if [ "${BASH_REMATCH[1]}" -ne 7 ]; then
-    echo "Unexpected collect count: $message" >&2
-    exit 1
-  fi
-else
-  echo "Unexpected collect message: $message" >&2
-  exit 1
-fi
-
-expect_entries_count() {
-  local url="$1"
-  local expected="$2"
-  status=$(fetch GET "$url")
-  if [ "$status" != "200" ]; then
-    echo "GET $url failed with status $status" >&2
-    cat "$E2E_BODY" >&2
-    exit 1
-  fi
-  if ! jq -e '.success == true' "$E2E_BODY" >/dev/null; then
-    echo "Entries response marked as failure" >&2
-    cat "$E2E_BODY" >&2
-    exit 1
-  fi
-  count=$(jq -r '.results.count // empty' "$E2E_BODY")
-  if ! [[ "$count" =~ ^[0-9]+$ ]]; then
-    echo "Invalid entries count: $count" >&2
-    cat "$E2E_BODY" >&2
-    exit 1
-  fi
-  if [ "$count" -ne "$expected" ]; then
-    echo "Expected $expected entries, got $count" >&2
-    exit 1
-  fi
-}
+log_step "Posting entries to $BASE_URL/collect/$E2E_HOSTNAME"
+fetch POST "$BASE_URL/collect/$E2E_HOSTNAME" "$payload"
+assert_status "$E2E_STATUS" "POST" "$BASE_URL/collect/$E2E_HOSTNAME"
+assert_json_success "Collect response marked as failure"
+assert_collected_count 7
 
 expect_entries_count "$BASE_URL/entries/$E2E_HOSTNAME?since=-1&priority=-1&contains=" 7
 
 since_ts=$((base_ts + 4))
 expect_entries_count "$BASE_URL/entries/$E2E_HOSTNAME?since=$since_ts&priority=-1&contains=" 3
-
 expect_entries_count "$BASE_URL/entries/$E2E_HOSTNAME?since=-1&priority=3&contains=" 6
-
 expect_entries_count "$BASE_URL/entries/$E2E_HOSTNAME?since=-1&priority=-1&contains=error%20spike" 6
-
 expect_entries_count "$BASE_URL/entries/$E2E_HOSTNAME?since=$since_ts&priority=3&contains=error%20spike" 2
 
-echo "Checking error spikes"
-status=$(fetch GET "$BASE_URL/errors/$E2E_HOSTNAME")
-if [ "$status" != "200" ]; then
-  echo "GET /errors failed with status $status" >&2
-  cat "$E2E_BODY" >&2
-  exit 1
-fi
+log_step "Checking error spikes"
+expect_error_spikes "$BASE_URL/errors/$E2E_HOSTNAME" "$E2E_SERVICE" 6
 
-if ! jq -e '.success == true' "$E2E_BODY" >/dev/null; then
-  echo "Error spikes response marked as failure" >&2
-  cat "$E2E_BODY" >&2
-  exit 1
-fi
-if ! jq -e '.results | length > 0' "$E2E_BODY" >/dev/null; then
-  echo "No error spikes returned" >&2
-  cat "$E2E_BODY" >&2
-  exit 1
-fi
-service_count=$(jq -r --arg service "$E2E_SERVICE" '
-  .results[]
-  | select((.service_name // .["service-name"] // .service) == $service)
-  | (.error_count // .["error-count"] // .errorCount)
-' "$E2E_BODY" | head -n1)
-if [ -z "$service_count" ]; then
-  echo "Service $E2E_SERVICE not found in spikes" >&2
-  cat "$E2E_BODY" >&2
-  exit 1
-fi
-if [ "$service_count" -ne 6 ]; then
-  echo "Unexpected error spike count: $service_count" >&2
-  exit 1
-fi
+log_step "Waiting for analysis results"
+analysis_id=$(wait_for_analysis_id "$BASE_URL/analysis/history/$E2E_HOSTNAME" "$WAIT_TIMEOUT")
 
-echo "Waiting for analysis results"
-analysis_id=""
-start=$(date +%s)
-while true; do
-  status=$(fetch GET "$BASE_URL/analysis/history/$E2E_HOSTNAME")
-  if [ "$status" = "200" ] && ! grep -q "No analysis history found" "$E2E_BODY"; then
-    analysis_id=$(grep -oE '/analysis/details/[0-9]+' "$E2E_BODY" | head -n1 | awk -F/ '{print $4}')
-    if [ -n "$analysis_id" ]; then
-      break
-    fi
-  fi
-  if [ $(( $(date +%s) - start )) -ge "$WAIT_TIMEOUT" ]; then
-    echo "Timed out waiting for analysis history" >&2
-    cat "$E2E_BODY" >&2
-    exit 1
-  fi
-  sleep 2
-done
+log_step "Checking analysis details"
+fetch GET "$BASE_URL/analysis/details/$analysis_id"
+assert_status "$E2E_STATUS" "GET" "$BASE_URL/analysis/details/$analysis_id"
+expect_body_contains "$E2E_HOSTNAME"
+expect_body_contains "$E2E_SERVICE"
+expect_body_contains "Needs User Action"
+expect_body_contains "Needs User Action:</strong> Yes"
 
-echo "Checking analysis details"
-status=$(fetch GET "$BASE_URL/analysis/details/$analysis_id")
-if [ "$status" != "200" ]; then
-  echo "GET /analysis/details failed with status $status" >&2
-  cat "$E2E_BODY" >&2
-  exit 1
-fi
-grep -q "$E2E_HOSTNAME" "$E2E_BODY"
-grep -q "$E2E_SERVICE" "$E2E_BODY"
-grep -q "Needs User Action" "$E2E_BODY"
-grep -q "Needs User Action:</strong> Yes" "$E2E_BODY"
+log_step "Checking dashboard overview"
+fetch GET "$BASE_URL/dashboard/overview"
+assert_status "$E2E_STATUS" "GET" "$BASE_URL/dashboard/overview"
+expect_body_contains "/analysis/history/$E2E_HOSTNAME"
 
-echo "Checking dashboard overview"
-status=$(fetch GET "$BASE_URL/dashboard/overview")
-if [ "$status" != "200" ]; then
-  echo "GET /dashboard/overview failed with status $status" >&2
-  cat "$E2E_BODY" >&2
-  exit 1
-fi
-grep -q "/analysis/history/$E2E_HOSTNAME" "$E2E_BODY"
+log_step "Checking dashboard alerts"
+fetch GET "$BASE_URL/dashboard/alerts"
+assert_status "$E2E_STATUS" "GET" "$BASE_URL/dashboard/alerts"
+expect_body_contains "$E2E_HOSTNAME"
+expect_body_contains "$E2E_SERVICE"
 
-echo "Checking dashboard alerts"
-status=$(fetch GET "$BASE_URL/dashboard/alerts")
-if [ "$status" != "200" ]; then
-  echo "GET /dashboard/alerts failed with status $status" >&2
-  cat "$E2E_BODY" >&2
-  exit 1
-fi
-grep -q "$E2E_HOSTNAME" "$E2E_BODY"
-grep -q "$E2E_SERVICE" "$E2E_BODY"
-
-echo "Checking analysis queue"
-status=$(fetch GET "$BASE_URL/analysis/queue")
-if [ "$status" != "200" ]; then
-  echo "GET /analysis/queue failed with status $status" >&2
-  cat "$E2E_BODY" >&2
-  exit 1
-fi
-grep -q "$E2E_SERVICE" "$E2E_BODY"
+log_step "Checking analysis queue"
+fetch GET "$BASE_URL/analysis/queue"
+assert_status "$E2E_STATUS" "GET" "$BASE_URL/analysis/queue"
+expect_body_contains "$E2E_SERVICE"
 
 echo "E2E tests passed."
