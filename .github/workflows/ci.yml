@@ -28,6 +28,8 @@ on:
 env:
   CARGO_TERM_COLOR: always
   GOLEM_VERSION: ${{ github.event.inputs.golemversion != '' && github.event.inputs.golemversion || '1.4.2' }}
+  GOLEM_PRESET: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.debugmode == 'true' && 'debug' || 'release' }}
+  CARGO_TEST_FLAGS: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.debugmode != 'true' && '--release' || '' }}
 
 jobs:
   build:
@@ -90,9 +92,9 @@ jobs:
       - name: Install cargo-component
         run: cargo binstall --no-confirm cargo-component || true
       - name: Build components
-        run: golem build --preset=release
+        run: golem build --preset="${GOLEM_PRESET}"
       - name: Test
-        run: cargo test --all
+        run: cargo test --all ${CARGO_TEST_FLAGS}
       - name: Clippy
         run: cargo clippy -- -Dwarnings
 
@@ -157,7 +159,7 @@ jobs:
       - name: Install cargo-component
         run: cargo binstall --no-confirm cargo-component || true
       - name: Build components
-        run: golem build --preset=release
+        run: golem build --preset="${GOLEM_PRESET}"
       - name: Start services
         env:
           GOLEM_ARCH: x86_64-unknown-linux-gnu
@@ -181,7 +183,7 @@ jobs:
           DATABASE_USER: "postgres"
           DATABASE_DB: "postgres"
           DATABASE_PASSWORD: "journai"
-        run: golem deploy --environment local --preset=release --yes
+        run: golem deploy --environment local --preset="${GOLEM_PRESET}" --yes
       - name: Run E2E tests
         env:
           BASE_URL: http://journai.localhost:9006
