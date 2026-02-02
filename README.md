@@ -273,7 +273,7 @@ The `common-env` component template in `common-rust/golem.yaml` provides default
 If you use the `docker-compose.yml` Postgres service, override the database settings to:
 
 ```bash
-DATABASE_HOST=journai_test
+DATABASE_HOST=postgres
 DATABASE_USER=postgres
 DATABASE_DB=postgres
 DATABASE_PASSWORD=journai

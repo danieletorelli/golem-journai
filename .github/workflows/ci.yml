@@ -203,7 +203,7 @@ jobs:
         env:
           JOURNAI_LLM_MOCK: "true"
           OPENROUTER_API_KEY: "dummy"
-          DATABASE_HOST: "journai_test"
+          DATABASE_HOST: "postgres"
           DATABASE_USER: "postgres"
           DATABASE_DB: "postgres"
           DATABASE_PASSWORD: "journai"
