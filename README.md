@@ -1,11 +1,11 @@
-# Golem Journai
+# Golem JournAI
 
 A distributed log analysis and monitoring system built on [Golem Cloud](https://golem.cloud), leveraging WebAssembly
 components for scalable, intelligent log processing and visualization.
 
 ## Overview
 
-Golem Journai is a cloud-native journald log analysis platform that collects, analyzes, and visualizes system logs using
+Golem JournAI is a cloud-native journald log analysis platform that collects, analyzes, and visualizes system logs using
 AI-powered insights. Built with Rust and compiled to WebAssembly, it runs as distributed stateful components on the
 Golem Cloud platform.
 

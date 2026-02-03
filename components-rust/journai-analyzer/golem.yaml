@@ -9,7 +9,7 @@
 #httpApi:
 #  definitions:
 #    journai-analyzer-api:
-#      version: '0.0.1'
+#      version: '1.0.0'
 #      routes:
 #        - method: POST
 #          path: /journai-analyzer-api/{name}/increment

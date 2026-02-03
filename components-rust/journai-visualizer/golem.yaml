@@ -9,7 +9,7 @@
 httpApi:
   definitions:
     journai-visualizer-api:
-      version: '0.0.1'
+      version: '1.0.0'
       routes:
         - method: GET
           path: /dashboard/overview
