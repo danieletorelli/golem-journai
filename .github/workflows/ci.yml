@@ -5,6 +5,10 @@ on:
     tags: [ 'v*.*.*' ]
     branches: [ '**' ]
   pull_request:
+    types:
+      - opened
+      - reopened
+      - ready_for_review
   pull_request_review:
     types:
       - submitted
