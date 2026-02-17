@@ -80,7 +80,7 @@ fn extract_converts_basic_types() {
 
 #[test]
 fn extract_handles_null_and_boolean_fallbacks() {
-    // Verify NULLs and numeric fallbacks map to expected booleans.
+    // Verify NULLs and numeric fallbacks map to expected booleans
     assert!(!extract::<bool>(&DbValue::Null));
     assert!(extract::<bool>(&DbValue::Int2(1)));
     assert!(!extract::<bool>(&DbValue::Int2(0)));
@@ -171,7 +171,7 @@ fn journal_entry_equality_ignores_non_identity_fields() {
 
 #[test]
 fn api_error_type_maps_postgres_errors() {
-    // Verify Postgres errors map to API error variants.
+    // Verify Postgres errors map to API error variants
     let error = Error::ConnectionFailure("oops".to_string());
     let mapped = APIErrorType::Insert.of_postgres(error);
 

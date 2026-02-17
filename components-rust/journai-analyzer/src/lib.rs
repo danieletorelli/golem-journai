@@ -29,20 +29,6 @@ impl Analyzer for AnalyzerImpl {
             APIErrorType::LLM.of_string("JOURNAI_LLM_MODEL env variable is not defined".to_string())
         })?;
 
-        if Self::should_mock_llm() {
-            let summary = self.build_mock_summary(&errors);
-            let assertion = Self::build_mock_assertion();
-            database::insert_analysis(
-                self.hostname.clone(),
-                "spike".to_string(),
-                model,
-                summary.clone(),
-                assertion,
-                errors.entries,
-            )?;
-            return Ok(summary);
-        }
-
         let (events, spike_event_summary) = self.execute_spike_summary_llm_call(&model, &errors)?;
         let spike_event_assertion = self.execute_spike_structured_llm_call(&model, &events)?;
 
@@ -88,11 +74,7 @@ impl AnalyzerImpl {
     fn build_mock_summary(&self, errors: &ServiceErrors) -> String {
         format!(
             "Mock analysis for host {} service {}: {} errors between {} and {}.",
-            self.hostname,
-            self.service,
-            errors.error_count,
-            errors.started_at,
-            errors.last_at
+            self.hostname, self.service, errors.error_count, errors.started_at, errors.last_at
         )
     }
 
@@ -120,27 +102,20 @@ impl AnalyzerImpl {
         &self,
         errors: &ServiceErrors,
         entries: &[JournalEntry],
-    ) -> String {
+    ) -> Result<String, APIError> {
         let header = self.compose_analysis_request_header(
             errors.started_at,
             errors.last_at,
             errors.error_count,
         );
 
-        let entries_json = entries
-            .iter()
-            .filter_map(|entry| {
-                serde_json::to_string(entry)
-                    .map_err(|e| {
-                        log::warn!("Failed to serialize entry: {}", e);
-                        e
-                    })
-                    .ok()
-            })
-            .collect::<Vec<_>>()
-            .join("\n\n");
+        let entries_toon = toon_format::encode_default(&entries).map_err(|e| {
+            let message = format!("Failed to encode entries: {}", e);
+            log::error!("{}", message);
+            APIErrorType::LLM.of_string(message)
+        })?;
 
-        format!(
+        Ok(format!(
             r#"{header}
 
             Please analyze the following journal entries and provide:
@@ -149,11 +124,13 @@ impl AnalyzerImpl {
             3. **Probable Root Cause**: Your best hypothesis for why this happened (e.g., resource exhaustion, configuration error, upstream dependency failure).
             4. **Checklist of Actions**: 3-5 concrete commands or checks for the on-call engineer to run immediately.
 
-            Journal Entries (JSON format):
-            {entries_json}"#,
+            Journal Entries (TOON format):
+            ```toon
+            {entries_toon}
+            ```"#,
             header = header,
-            entries_json = entries_json,
-        )
+            entries_toon = entries_toon,
+        ))
     }
 
     fn compose_spike_summary_user_prompt_lite(
@@ -212,8 +189,30 @@ impl AnalyzerImpl {
 
         let entries = database::get_entries_by_ids(errors.entries.clone(), entries_limit)?;
 
-        let user_prompt = self.compose_spike_summary_user_prompt(errors, &entries);
+        let user_prompt = self.compose_spike_summary_user_prompt(errors, &entries)?;
         let lite_user_prompt = self.compose_spike_summary_user_prompt_lite(errors, &entries);
+
+        if Self::should_mock_llm() {
+            log::info!("LLM mock enabled; skipping spike summary LLM call");
+            let mock_summary = self.build_mock_summary(errors);
+
+            let mut history_events = self
+                .events
+                .iter()
+                .filter(|event| match event {
+                    llm::Event::Message(msg) => msg.role != llm::Role::System,
+                    _ => true,
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            history_events.push(llm::Event::Message(llm::Message {
+                role: llm::Role::User,
+                name: Some("JournAI".to_string()),
+                content: vec![llm::ContentPart::Text(lite_user_prompt)],
+            }));
+
+            return Ok((history_events, mock_summary));
+        }
 
         let config = llm::Config {
             model: model.to_string(),
@@ -296,6 +295,11 @@ impl AnalyzerImpl {
         model: &str,
         events: &[llm::Event],
     ) -> Result<SpikeEventAssertion, APIError> {
+        if Self::should_mock_llm() {
+            log::info!("LLM mock enabled; skipping structured LLM call");
+            return Ok(Self::build_mock_assertion());
+        }
+
         let response_format = serde_json::json!({
             "type": "json_schema",
             "json_schema": {
@@ -531,8 +535,50 @@ mod tests {
     }
 
     #[test]
+    fn spike_summary_prompt_uses_toon_format() {
+        // Verify the full prompt uses TOON format and includes serialized entries
+        let analyzer = AnalyzerImpl::new("host-1".to_string(), "svc".to_string());
+        let errors = ServiceErrors {
+            hostname: "host-1".to_string(),
+            service_name: "svc".to_string(),
+            error_count: 2,
+            min_priority: 3,
+            started_at: 10.0,
+            last_at: 20.0,
+            entries: vec![1, 2],
+        };
+        let mut first = sample_entry("first error");
+        first.pid = Some("123".to_string());
+        first.unit = Some("ssh.service".to_string());
+        first.systemd_unit = Some("ssh.service".to_string());
+        first.code_file = Some("/usr/src/app/main.rs".to_string());
+
+        let mut second = sample_entry("second error");
+        second.priority = "0".to_string();
+        second.comm = Some("sshd".to_string());
+        second.exe = Some("/usr/sbin/sshd".to_string());
+        second.cmdline = Some("/usr/sbin/sshd -D".to_string());
+        second.runtime_scope = "user".to_string();
+
+        let entries = vec![first, second];
+
+        let prompt = analyzer
+            .compose_spike_summary_user_prompt(&errors, &entries)
+            .expect("failed to compose prompt");
+        let encoded = toon_format::encode_default(&entries).expect("failed to encode TOON");
+
+        assert!(prompt.contains("TOON format"));
+        assert!(prompt.contains("```toon"));
+        assert!(prompt.contains(&encoded));
+        assert!(encoded.contains("first error"));
+        assert!(encoded.contains("second error"));
+        assert!(encoded.contains("ssh.service"));
+        assert!(encoded.contains("/usr/sbin/sshd"));
+    }
+
+    #[test]
     fn truncate_message_keeps_short_or_exact_limit() {
-        // Verify truncation does not add ellipsis when not needed.
+        // Verify truncation does not add ellipsis when not needed
         let short_message = "short message";
         assert_eq!(
             AnalyzerImpl::truncate_message(short_message, 200),
@@ -548,16 +594,13 @@ mod tests {
 
     #[test]
     fn truncate_message_handles_utf8() {
-        // Verify truncation respects UTF-8 boundaries.
+        // Verify truncation respects UTF-8 boundaries
         let multibyte = "\u{00E9}".repeat(250);
         let truncated = AnalyzerImpl::truncate_message(&multibyte, 200);
 
         assert!(truncated.ends_with("..."));
         assert_eq!(truncated.chars().count(), 203);
-        assert_eq!(
-            truncated.trim_end_matches("...").chars().count(),
-            200
-        );
+        assert_eq!(truncated.trim_end_matches("...").chars().count(), 200);
     }
 
     #[test]

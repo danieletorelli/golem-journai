@@ -164,7 +164,7 @@ mod tests {
 
     #[test]
     fn matches_filters_accepts_priority_boundaries() {
-        // Verify priority bounds are inclusive.
+        // Verify priority bounds are inclusive
         let collector = CollectorImpl::new("host-a".to_string());
         let min_priority = sample_entry("host-a", "0", "ok");
         let max_priority = sample_entry("host-a", "7", "ok");

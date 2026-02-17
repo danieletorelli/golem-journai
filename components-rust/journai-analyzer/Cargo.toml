@@ -14,4 +14,5 @@ log = { workspace = true }
 golem-rust = { workspace = true, features = ["export_golem_agentic", "golem_ai"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+toon-format = { workspace = true }
 wstd = { workspace = true }
