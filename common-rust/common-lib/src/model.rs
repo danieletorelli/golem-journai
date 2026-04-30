@@ -1,6 +1,6 @@
 use crate::database::extract;
+use golem_ai_llm::model as llm;
 use golem_rust::bindings::golem::rdbms::postgres;
-use golem_rust::golem_ai::golem::llm::llm;
 use golem_rust::Schema;
 use serde::{Deserialize, Serialize};
 
@@ -9,10 +9,12 @@ pub type JournalEntryId = u64;
 #[derive(Debug, Clone, Serialize, Deserialize, Schema)]
 pub struct JournalEntry {
     /// Unique identifier for the current system boot session
+    #[serde(alias = "boot-id")]
     pub boot_id: String,
     /// Hostname of the system where the log was generated
     pub hostname: String,
     /// Unique identifier of the machine that generated the log entry
+    #[serde(alias = "machine-id")]
     pub machine_id: String,
     /// Syslog priority level (0=emergency to 7=debug)
     pub priority: String,
@@ -21,6 +23,7 @@ pub struct JournalEntry {
     /// Timestamp of the journal entry as a floating-point Unix epoch time
     pub date: f64,
     /// Runtime scope of the logging process (e.g., "system" or "user")
+    #[serde(alias = "runtime-scope")]
     pub runtime_scope: String,
     /// Process ID (PID) that generated the log entry
     pub pid: Option<String>,
@@ -33,6 +36,7 @@ pub struct JournalEntry {
     /// Syslog facility code indicating the type of program logging the message
     pub syslog_facility: Option<String>,
     /// Identifier string of the program that sent the syslog message
+    #[serde(alias = "syslog-identifier")]
     pub syslog_identifier: Option<String>,
     /// Process command name (short form of the executable name)
     pub comm: Option<String>,
@@ -149,7 +153,7 @@ impl APIErrorType {
     }
 
     pub fn of_llm(self, error: llm::Error) -> APIError {
-        let message = format!("LLM error: {}", error);
+        let message = format!("LLM error: {:?}", error);
 
         match self {
             APIErrorType::LLM => APIError::LLMError(message),
@@ -164,6 +168,40 @@ impl APIErrorType {
             _ => APIError::Other(message),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Schema)]
+pub struct CollectResponse {
+    pub success: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Schema)]
+pub struct EntriesResult {
+    pub entries: Vec<JournalEntry>,
+    pub count: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Schema)]
+pub struct EntriesFilters {
+    pub since: Option<f64>,
+    pub priority: Option<u8>,
+    pub contains: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Schema)]
+pub struct EntriesResponse {
+    pub success: bool,
+    pub results: Option<EntriesResult>,
+    pub filters: EntriesFilters,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Schema)]
+pub struct ErrorSpikesResponse {
+    pub success: bool,
+    pub results: Option<Vec<ServiceErrorsNoEntries>>,
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Schema)]

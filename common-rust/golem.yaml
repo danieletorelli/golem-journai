@@ -1,57 +1,6 @@
-# Schema for IDEA:
-# $schema: https://schema.golem.cloud/app/golem/1.4.2/golem.schema.json
-# Schema for vscode-yaml:
-# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.4.2/golem.schema.json
-
-# Field reference: https://learn.golem.cloud/app-manifest#field-reference
-# Creating HTTP APIs: https://learn.golem.cloud/invoke/making-custom-apis
+manifestVersion: 1.5.0
 
 componentTemplates:
-  rust:
-    presets:
-      debug:
-        default: true
-        build:
-          - command: cargo component build
-            sources:
-              - src
-              - ../../common-rust
-              - Cargo.toml
-              - ../../Cargo.toml
-            targets:
-              - ../../target/wasm32-wasip1/debug/{{ component_name | to_snake_case }}.wasm
-          - generateAgentWrapper: ../../golem-temp/agents/{{ component_name | to_snake_case }}.wrapper.wasm
-            basedOnCompiledWasm: ../../target/wasm32-wasip1/debug/{{ component_name | to_snake_case }}.wasm
-          - composeAgentWrapper: ../../golem-temp/agents/{{ component_name | to_snake_case }}.wrapper.wasm
-            withAgent: ../../target/wasm32-wasip1/debug/{{ component_name | to_snake_case }}.wasm
-            to: ../../golem-temp/agents/{{ component_name | to_snake_case }}_debug.static.wasm
-        sourceWit: .wit/wit
-        generatedWit: ../../golem-temp/agents/{{ component_name | to_snake_case }}/wit-generated
-        componentWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}_debug.static.wasm
-        linkedWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}_debug.wasm
-        clean:
-          - src/bindings.rs
-      release:
-        build:
-          - command: cargo component build --release
-            sources:
-              - src
-              - ../../common-rust
-              - Cargo.toml
-              - ../../Cargo.toml
-            targets:
-              - ../../target/wasm32-wasip1/release/{{ component_name | to_snake_case }}.wasm
-          - generateAgentWrapper: ../../golem-temp/agents/{{ component_name | to_snake_case }}.wrapper.wasm
-            basedOnCompiledWasm: ../../target/wasm32-wasip1/release/{{ component_name | to_snake_case }}.wasm
-          - composeAgentWrapper: ../../golem-temp/agents/{{ component_name | to_snake_case }}.wrapper.wasm
-            withAgent: ../../target/wasm32-wasip1/release/{{ component_name | to_snake_case }}.wasm
-            to: ../../golem-temp/agents/{{ component_name | to_snake_case }}_release.static.wasm
-        sourceWit: .wit/wit
-        generatedWit: ../../golem-temp/agents/{{ component_name | to_snake_case }}/wit-generated
-        componentWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}_release.static.wasm
-        linkedWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}_release.wasm
-        clean:
-          - src/bindings.rs
   common-env:
     env:
       DATABASE_TYPE: postgresql
@@ -63,32 +12,19 @@ componentTemplates:
       DATABASE_QUERY_LOG: "false"
     presets:
       debug:
-        dependencies:
-          - type: wasm
-            url: https://github.com/golemcloud/golem-ai/releases/download/v0.4.0/golem_llm_openrouter.wasm
-          # - type: wasm
-          #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.4.0/golem_llm_ollama.wasm
         env:
           RUST_LOG: debug
-          GOLEM_LLM_LOG: debug
           OPENROUTER_API_KEY: "{{ OPENROUTER_API_KEY }}"
           JOURNAI_LLM_MOCK: "{{ JOURNAI_LLM_MOCK }}"
           JOURNAI_LLM_MODEL: "xiaomi/mimo-v2-flash:free"
-          # JOURNAI_LLM_MODEL: "mistralai/devstral-2512:free"
-          # JOURNAI_LLM_MODEL: "perplexity/sonar-pro"
-          # GOLEM_OLLAMA_BASE_URL: "http://model-runner.docker.internal/"
-          # JOURNAI_LLM_MODEL: "ai/gpt-oss"
       release:
-        dependencies:
-          - type: wasm
-            url: https://github.com/golemcloud/golem-ai/releases/download/v0.4.0/golem_llm_openrouter.wasm
         env:
           RUST_LOG: info
-          GOLEM_LLM_LOG: warn
           OPENROUTER_API_KEY: "{{ OPENROUTER_API_KEY }}"
           JOURNAI_LLM_MOCK: "{{ JOURNAI_LLM_MOCK }}"
           JOURNAI_LLM_MODEL: "perplexity/sonar-pro"
           JOURNAI_LLM_ENTRIES_LIMIT: "3000"
+
 customCommands:
   cargo-clean:
-    - command: cargo clean
+  - command: cargo clean

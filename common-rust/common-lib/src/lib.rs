@@ -1,23 +1,35 @@
 pub mod database;
 pub mod model;
 
-use crate::model::{APIError, JournalEntry, ServiceErrors, ServiceErrorsNoEntries};
-use golem_rust::agent_definition;
+use crate::model::{
+    APIError, CollectResponse, EntriesResponse, ErrorSpikesResponse, JournalEntry, ServiceErrors,
+};
+use golem_rust::{agent_definition, endpoint};
 
-#[agent_definition(ephemeral)]
+#[agent_definition(ephemeral, mount = "/", cors = ["*"])]
 pub trait Collector {
-    fn new(hostname: String) -> Self;
+    fn new() -> Self;
 
-    fn collect(&self, entries: Vec<JournalEntry>) -> Result<u64, APIError>;
+    #[endpoint(post = "/collect/{hostname}")]
+    fn collect(
+        &self,
+        hostname: String,
+        entries: Vec<JournalEntry>,
+    ) -> Result<CollectResponse, APIError>;
 
+    #[endpoint(
+        get = "/entries/{hostname}?since={since}&priority={priority}&contains={message_contains}"
+    )]
     fn get_entries(
         &self,
+        hostname: String,
         since: Option<f64>,
-        priority: Option<u8>,
+        priority: Option<i32>,
         message_contains: Option<String>,
-    ) -> Result<(Vec<JournalEntry>, u64), APIError>;
+    ) -> Result<EntriesResponse, APIError>;
 
-    fn get_error_spikes(&self) -> Result<Vec<ServiceErrorsNoEntries>, APIError>;
+    #[endpoint(get = "/errors/{hostname}")]
+    fn get_error_spikes(&self, hostname: String) -> Result<ErrorSpikesResponse, APIError>;
 }
 
 #[agent_definition]
@@ -27,13 +39,18 @@ pub trait Analyzer {
     async fn analyze_spike(&mut self, errors: ServiceErrors) -> Result<String, APIError>;
 }
 
-#[agent_definition(ephemeral)]
+#[agent_definition(ephemeral, mount = "/", cors = ["*"])]
 pub trait Visualizer {
     fn new() -> Self;
 
+    #[endpoint(get = "/dashboard/overview")]
     fn dashboard_overview(&self) -> Result<String, APIError>;
+    #[endpoint(get = "/dashboard/alerts")]
     fn dashboard_alerts(&self) -> Result<String, APIError>;
+    #[endpoint(get = "/analysis/queue")]
     fn analysis_queue(&self) -> Result<String, APIError>;
+    #[endpoint(get = "/analysis/history/{hostname}")]
     fn analysis_history(&self, hostname: String) -> Result<String, APIError>;
+    #[endpoint(get = "/analysis/details/{analysis_id}")]
     fn analysis_details(&self, analysis_id: String) -> Result<String, APIError>;
 }

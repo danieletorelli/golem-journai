@@ -4,8 +4,10 @@ use common_lib::model::{
     APIError, APIErrorType, JournalEntry, ServiceErrors, SpikeEventAssertion, SpikeEventSeverity,
 };
 use common_lib::Analyzer;
+use golem_ai_llm::model as llm;
+use golem_ai_llm::LlmProvider;
+use golem_ai_llm_openrouter::DurableOpenRouter;
 use golem_rust::agent_implementation;
-use golem_rust::golem_ai::golem::llm::llm;
 use std::env;
 
 struct AnalyzerImpl {
@@ -216,7 +218,7 @@ impl AnalyzerImpl {
 
         let config = llm::Config {
             model: model.to_string(),
-            temperature: Some(0.2),
+            temperature: Some(0.2f32),
             max_tokens: None,
             stop_sequences: None,
             tools: None,
@@ -252,7 +254,7 @@ impl AnalyzerImpl {
             content: vec![llm::ContentPart::Text(user_prompt)],
         }));
 
-        let response = llm::send(&call_events, &config)
+        let response = DurableOpenRouter::send(call_events, config)
             .map(|r| {
                 log::debug!("LLM Response: {:?}", r);
                 r
@@ -326,7 +328,7 @@ impl AnalyzerImpl {
 
         let config = llm::Config {
             model: model.to_string(),
-            temperature: Some(0.2),
+            temperature: Some(0.2f32),
             max_tokens: None,
             stop_sequences: None,
             tools: None,
@@ -366,7 +368,7 @@ impl AnalyzerImpl {
             )],
         }));
 
-        let response = llm::send(&request_events, &config)
+        let response = DurableOpenRouter::send(request_events, config)
             .map(|r| {
                 log::debug!("LLM Response: {:?}", r);
                 r
