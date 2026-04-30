@@ -137,6 +137,7 @@ jobs:
 
   auto-merge:
     if: github.event_name == 'pull_request_review' && github.event.review.state == 'approved'
+    needs: ci
     runs-on: ubuntu-latest
     steps:
       - uses: TimonVS/pr-labeler-action@v5.0.0
