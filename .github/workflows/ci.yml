@@ -4,11 +4,6 @@ on:
   push:
     tags: [ 'v*.*.*' ]
     branches: [ '**' ]
-  pull_request:
-    types:
-      - opened
-      - reopened
-      - ready_for_review
   pull_request_review:
     types:
       - submitted
@@ -41,7 +36,7 @@ concurrency:
 
 jobs:
   ci:
-    if: github.event_name != 'pull_request_review'
+    if: github.event_name == 'push' || (github.event_name == 'pull_request_review' && github.event.review.state == 'approved')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
