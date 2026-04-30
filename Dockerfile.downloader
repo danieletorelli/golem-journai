@@ -1,6 +1,6 @@
 FROM ubuntu:latest AS downloader
 
-ARG GOLEM_VERSION=1.4.2
+ARG GOLEM_VERSION=1.5.0
 ARG GOLEM_ARCH=x86_64-unknown-linux-gnu
 
 RUN apt-get update && apt-get install -y curl
@@ -18,7 +18,7 @@ RUN if [ "$GOLEM_VERSION" = "latest" ]; then \
 
 FROM ubuntu:latest
 
-RUN apt-get update && apt-get install -y openssl
+RUN apt-get update && apt-get install -y openssl ca-certificates
 
 COPY --from=downloader /usr/local/bin/golem /usr/local/bin/golem
 

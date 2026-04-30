@@ -159,7 +159,6 @@ golem deploy --preset release
 | `JOURNAI_LLM_ENTRIES_LIMIT`        | Limit of entries for LLM analysis               | `(not defined, default: 500)` | `"3000"`                     |
 | `JOURNAI_LLM_CONTEXT_WINDOW_LIMIT` | Limit of events in the LLM context window       | `(not defined, default: 20)`  | `(not defined, default: 20)` |
 | `RUST_LOG`                         | Logging level for Rust                          | `debug`                       | `info`                       |
-| `GOLEM_LLM_LOG`                    | Logging level for Golem's LLM module            | `debug`                       | `warn`                       |
 
 ## Usage
 
@@ -170,16 +169,17 @@ Send journal entries to the collector:
 ```bash
 curl -X POST http://journai.localhost:9006/collect/myhost \
   -H "Content-Type: application/json" \
-  -d '[{
-    "boot_id": "b4df5e7d8e4f4b5a8d2a7ab2c1a0ef9a",
-    "hostname": "myhost",
-    "machine_id": "c1d2e3f4a5b67890c1d2e3f4a5b67890",
-    "priority": "3",
-    "message": "Error occurred in service",
-    "date": 1234567890.0,
-    "runtime_scope": "system"
-    ...
-  }]'
+  -d '{"entries":[
+    {
+      "boot_id": "b4df5e7d8e4f4b5a8d2a7ab2c1a0ef9a",
+      "hostname": "myhost",
+      "machine_id": "c1d2e3f4a5b67890c1d2e3f4a5b67890",
+      "priority": "3",
+      "message": "Error occurred in service",
+      "date": 1234567890.0,
+      "runtime_scope": "system"
+    }
+  ]}'
 ```
 
 This is aimed to be used by [Fluent Bit](https://fluentbit.io), with a configuration similar to:
@@ -214,31 +214,80 @@ pipeline:
   outputs:
     - name: http
       match: '*'
-      format: json
       host: journai.localhost
       port: 9006
       uri: /collect/myhost
+      format: msgpack
+      body_key: $body
+      headers_key: $headers
       retry_limit: false
 ```
 
 - normalize.lua
 
 ```lua
-local function to_kebab(str)
-    str = str:gsub("(%l)(%u)", "%1-%2")
-    str = str:gsub("_", "-")
+local function to_snake(str)
+    str = str:gsub("(%l)(%u)", "%1_%2")
+    str = str:gsub("-", "_")
     return string.lower(str)
 end
 
-function normalize_keys(tag, ts, record)
-    local new_record = {}
+local function json_escape(str)
+    return str
+        :gsub("\\", "\\\\")
+        :gsub("\"", "\\\"")
+        :gsub("\n", "\\n")
+        :gsub("\r", "\\r")
+        :gsub("\t", "\\t")
+end
 
-    for k, v in pairs(record) do
-        local new_key = to_kebab(k)
-        new_record[new_key] = v
+local function encode_json(value)
+    local value_type = type(value)
+
+    if value_type == "string" then
+        return "\"" .. json_escape(value) .. "\""
+    end
+    if value_type == "number" or value_type == "boolean" then
+        return tostring(value)
+    end
+    if value == nil then
+        return "null"
+    end
+    if value_type == "table" then
+        local array_len = #value
+        local parts = {}
+
+        if array_len > 0 then
+            for i = 1, array_len do
+                parts[#parts + 1] = encode_json(value[i])
+            end
+            return "[" .. table.concat(parts, ",") .. "]"
+        end
+
+        for k, v in pairs(value) do
+            parts[#parts + 1] = "\"" .. tostring(k) .. "\":" .. encode_json(v)
+        end
+        return "{" .. table.concat(parts, ",") .. "}"
     end
 
-    return 1, ts, new_record
+    return "\"" .. json_escape(tostring(value)) .. "\""
+end
+
+function normalize_keys(tag, ts, record)
+    local entry = {}
+    for k, v in pairs(record) do
+        entry[to_snake(k)] = v
+    end
+
+    local payload = { entries = { entry } }
+    local body = encode_json(payload)
+
+    return 2, ts, {
+        body = body,
+        headers = {
+            ["Content-Type"] = "application/json"
+        }
+    }
 end
 ```
 

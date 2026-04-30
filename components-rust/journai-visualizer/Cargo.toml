@@ -12,7 +12,7 @@ common-lib = { path = "../../common-rust/common-lib" }
 chrono = { version = "0.4", default-features = false, features = ["alloc"] }
 
 log = { workspace = true }
-golem-rust = { workspace = true, features = ["export_golem_agentic", "golem_ai"] }
+golem-rust = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 wstd = { workspace = true }

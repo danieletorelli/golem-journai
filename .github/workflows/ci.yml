@@ -18,11 +18,11 @@ on:
         description: Golem version
         type: choice
         required: false
-        default: 1.4.2
+        default: 1.5.0
         options:
           - latest
           - master
-          - 1.4.2
+          - 1.5.0
       debugmode:
         description: Run tests in debug mode
         type: boolean
@@ -31,7 +31,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  GOLEM_VERSION: ${{ github.event.inputs.golemversion != '' && github.event.inputs.golemversion || '1.4.2' }}
+  GOLEM_VERSION: ${{ github.event.inputs.golemversion != '' && github.event.inputs.golemversion || '1.5.0' }}
   GOLEM_PRESET: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.debugmode == 'true' && 'debug' || 'release' }}
   CARGO_TEST_FLAGS: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.debugmode != 'true' && '--release' || '' }}
 
@@ -48,6 +48,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
+          targets: wasm32-wasip2
       - name: Install protobuf
         if: env.GOLEM_VERSION == 'master'
         uses: arduino/setup-protoc@v3
@@ -100,7 +101,7 @@ jobs:
       - name: Install cargo-component
         run: cargo binstall --no-confirm cargo-component || true
       - name: Build components
-        run: golem build --preset="${GOLEM_PRESET}"
+        run: golem build --preset="${GOLEM_PRESET}" --yes
       - name: Test
         run: cargo test --all ${CARGO_TEST_FLAGS}
       - name: Clippy
