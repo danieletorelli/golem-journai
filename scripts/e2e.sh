@@ -93,7 +93,7 @@ json_entry() {
   escaped_message=$(json_escape "$message")
   escaped_hostname=$(json_escape "$hostname")
   escaped_service=$(json_escape "$E2E_SERVICE")
-  printf '{"boot-id":"%s","machine-id":"%s","hostname":"%s","priority":"%s","message":"%s","date":%s,"runtime-scope":"system","syslog-identifier":"%s","comm":"%s","pid":"1234","uid":"0","gid":"0"}' \
+  printf '{"boot_id":"%s","machine_id":"%s","hostname":"%s","priority":"%s","message":"%s","date":%s,"runtime_scope":"system","syslog_identifier":"%s","comm":"%s","pid":"1234","uid":"0","gid":"0"}' \
     "$boot_id" \
     "$machine_id" \
     "$escaped_hostname" \
@@ -115,7 +115,7 @@ build_payload() {
   entries+=("$(json_entry "$((base_ts + 7))" "9" "invalid priority entry")")
   local joined
   joined=$(IFS=,; printf '%s' "${entries[*]}")
-  printf '[%s]' "$joined"
+  printf '{"entries":[%s]}' "$joined"
 }
 
 assert_status() {
