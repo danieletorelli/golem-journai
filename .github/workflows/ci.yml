@@ -49,6 +49,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
+          targets: wasm32-wasip2
       - name: Install protobuf
         if: env.GOLEM_VERSION == 'master'
         uses: arduino/setup-protoc@v3
