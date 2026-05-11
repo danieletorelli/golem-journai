@@ -601,7 +601,7 @@ checksum = "92ecc6618181def0457392ccd0ee51198e065e016d1d527a7ac1b6dc7c1f09d2"
 
 [[package]]
 name = "journai_analyzer"
-version = "1.0.0"
+version = "1.1.1"
 dependencies = [
  "common-lib",
  "golem-ai-llm",
@@ -616,7 +616,7 @@ dependencies = [
 
 [[package]]
 name = "journai_collector"
-version = "1.0.0"
+version = "1.1.1"
 dependencies = [
  "common-lib",
  "golem-rust",
@@ -628,7 +628,7 @@ dependencies = [
 
 [[package]]
 name = "journai_visualizer"
-version = "1.0.0"
+version = "1.1.1"
 dependencies = [
  "chrono",
  "common-lib",
