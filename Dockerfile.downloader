@@ -1,6 +1,6 @@
 FROM ubuntu:latest AS downloader
 
-ARG GOLEM_VERSION=1.5.0
+ARG GOLEM_VERSION=1.5.1
 ARG GOLEM_ARCH=x86_64-unknown-linux-gnu
 
 RUN apt-get update && apt-get install -y curl

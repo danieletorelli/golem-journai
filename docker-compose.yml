@@ -6,7 +6,7 @@ services:
       dockerfile: Dockerfile.downloader
       pull: true
       args:
-        GOLEM_VERSION: ${GOLEM_VERSION:-1.5.0}
+        GOLEM_VERSION: ${GOLEM_VERSION:-1.5.1}
         GOLEM_ARCH: ${GOLEM_ARCH:-aarch64-unknown-linux-gnu}
     container_name: golem
     ports:
