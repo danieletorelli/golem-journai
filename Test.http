@@ -2,71 +2,58 @@
 
 POST http://journai.localhost:9006/collect/loki
 Accept: application/json
+Content-Type: application/json
 
-[
-  {
-    "date":1743859411.814896,
-    "uid":"0",
-    "gid":"0",
-    "cap-effective":"1ffffffffff",
-    "boot-id":"f386e4aa97854312ad0f33cee927c973",
-    "machine-id":"2b9d4531fb3043e68d5d17371d0f97b3",
-    "hostname":"loki",
-    "runtime-scope":"system",
-    "transport":"syslog",
-    "syslog-facility":"4",
-    "syslog-identifier":"sshd-session",
-    "syslog-pid":"3352307",
-    "pid":"3352307",
-    "comm":"sshd-session",
-    "exe":"/usr/lib/ssh/sshd-session",
-    "cmdline":"\"sshd-session: s3th [priv]\"",
-    "audit_loginuid":"1000",
-    "systemd-owner-uid":"1000",
-    "systemd-slice":"user-1000.slice",
-    "systemd-user-slice":"-.slice",
-    "priority":"4",
-    "syslog-timestamp":"Apr  5 15:23:31 ",
-    "message":"warning: mm_reap: preauth child terminated by signal 15",
-    "audit-session":"77",
-    "systemd-cgroup":"/user.slice/user-1000.slice/session-77.scope",
-    "systemd-session":"77",
-    "systemd-unit":"session-77.scope",
-    "systemd-invocation-id":"56bfa1e5ffb344e99081e9129c2525a7",
-    "source-boottime-timestamp":"1743859411751069"
-  },
-  {
-    "date":1743859412.814896,
-    "uid":"0",
-    "gid":"0",
-    "cap-effective":"1ffffffffff",
-    "boot-id":"f386e4aa97854312ad0f33cee927c973",
-    "machine-id":"2b9d4531fb3043e68d5d17371d0f97b3",
-    "hostname":"loki",
-    "runtime-scope":"system",
-    "transport":"syslog",
-    "syslog-facility":"4",
-    "syslog-identifier":"sshd-session",
-    "syslog-pid":"3352307",
-    "pid":"3352307",
-    "comm":"sshd-session",
-    "exe":"/usr/lib/ssh/sshd-session",
-    "cmdline":"\"sshd-session: s3th [priv]\"",
-    "audit_loginuid":"1000",
-    "systemd-owner-uid":"1000",
-    "systemd-slice":"user-1000.slice",
-    "systemd-user-slice":"-.slice",
-    "priority":"3",
-    "syslog-timestamp":"Apr  5 15:23:31 ",
-    "message":"error: mm_reap: preauth child terminated by signal 15",
-    "audit-session":"77",
-    "systemd-cgroup":"/user.slice/user-1000.slice/session-77.scope",
-    "systemd-session":"77",
-    "systemd-unit":"session-77.scope",
-    "systemd-invocation-id":"56bfa1e5ffb344e99081e9129c2525a7",
-    "source-boottime-timestamp":"1743859411751069"
-  }
-]
+{
+  "entries": [
+    {
+      "boot_id":"f386e4aa97854312ad0f33cee927c973",
+      "hostname":"loki",
+      "machine_id":"2b9d4531fb3043e68d5d17371d0f97b3",
+      "priority":"4",
+      "message":"warning: mm_reap: preauth child terminated by signal 15",
+      "date":1743859411.814896,
+      "runtime_scope":"system",
+      "pid":"3352307",
+      "uid":"0",
+      "gid":"0",
+      "transport":"syslog",
+      "syslog_facility":"4",
+      "syslog_identifier":"sshd-session",
+      "comm":"sshd-session",
+      "exe":"/usr/lib/ssh/sshd-session",
+      "cmdline":"\"sshd-session: s3th [priv]\"",
+      "systemd_unit":"session-77.scope",
+      "systemd_slice":"user-1000.slice",
+      "systemd_cgroup":"/user.slice/user-1000.slice/session-77.scope",
+      "invocation_id":"56bfa1e5ffb344e99081e9129c2525a7",
+      "source_boottime_timestamp":"1743859411751069"
+    },
+    {
+      "boot_id":"f386e4aa97854312ad0f33cee927c973",
+      "hostname":"loki",
+      "machine_id":"2b9d4531fb3043e68d5d17371d0f97b3",
+      "priority":"3",
+      "message":"error: mm_reap: preauth child terminated by signal 15",
+      "date":1743859412.814896,
+      "runtime_scope":"system",
+      "pid":"3352307",
+      "uid":"0",
+      "gid":"0",
+      "transport":"syslog",
+      "syslog_facility":"4",
+      "syslog_identifier":"sshd-session",
+      "comm":"sshd-session",
+      "exe":"/usr/lib/ssh/sshd-session",
+      "cmdline":"\"sshd-session: s3th [priv]\"",
+      "systemd_unit":"session-77.scope",
+      "systemd_slice":"user-1000.slice",
+      "systemd_cgroup":"/user.slice/user-1000.slice/session-77.scope",
+      "invocation_id":"56bfa1e5ffb344e99081e9129c2525a7",
+      "source_boottime_timestamp":"1743859411751069"
+    }
+  ]
+}
 
 ### Fetch
 
@@ -94,15 +81,15 @@ GET http://journai.localhost:9006/entries/loki?since=1743859412&priority=3&conta
 
 ### Fetch (contains)
 
-GET http://journai.localhost:9006/entries/loki?since=-1&priority=-1&contains=mm_reap: preauth
+GET http://journai.localhost:9006/entries/loki?since=-1&priority=-1&contains=mm_reap%3A%20preauth
 
 ### Fetch (priority & contains)
 
-GET http://journai.localhost:9006/entries/loki?since=-1&priority=3&contains=mm_reap: preauth
+GET http://journai.localhost:9006/entries/loki?since=-1&priority=3&contains=mm_reap%3A%20preauth
 
 ### Fetch (since & priority & contains)
 
-GET http://journai.localhost:9006/entries/loki?since=1743859412&priority=3&contains=mm_reap: preauth
+GET http://journai.localhost:9006/entries/loki?since=1743859412&priority=3&contains=mm_reap%3A%20preauth
 
 ### Fetch error spikes
 
