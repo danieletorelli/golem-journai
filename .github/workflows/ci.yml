@@ -97,7 +97,7 @@ jobs:
           echo "Golem CLI version: $(golem-cli --version | cut -d ' ' -f 2)"
           echo "Golem version: $(golem --version | cut -d ' ' -f 2)"
       - name: Install cargo-binstall
-        uses: cargo-bins/cargo-binstall@v1.20.1
+        uses: cargo-bins/cargo-binstall@v1.21.0
       - name: Install cargo-component
         run: cargo binstall --no-confirm cargo-component || true
       - name: Build components
